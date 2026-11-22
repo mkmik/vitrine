@@ -31,8 +31,9 @@ func injectRuntime(html, script string) string {
 }
 
 var runtimeSrc = sync.OnceValue(func() string {
+	h, _ := webFS.ReadFile("web/harden.js")
 	b, _ := webFS.ReadFile("web/runtime.js")
-	return strings.ReplaceAll(string(b), "</script", "<\\/script")
+	return strings.ReplaceAll(string(h)+"\n"+string(b), "</script", "<\\/script")
 })
 
 func (s *Server) runtimeJS(mode string) string {
@@ -40,10 +41,26 @@ func (s *Server) runtimeJS(mode string) string {
 	return "window.__vitrine_cfg=" + string(cfg) + ";\n" + runtimeSrc()
 }
 
+// permissionsPolicy turns off device and sensor access for artifact pages.
+const permissionsPolicy = "camera=(), microphone=(), geolocation=(), display-capture=(), usb=(), serial=(), hid=(), bluetooth=(), " +
+	"midi=(), payment=(), publickey-credentials-get=(), accelerometer=(), gyroscope=(), magnetometer=(), screen-wake-lock=(), " +
+	"idle-detection=(), local-fonts=(), window-management=(), browsing-topics=()"
+
+func contentHeaders(h http.Header, csp string) {
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Security-Policy", csp)
+	h.Set("Permissions-Policy", permissionsPolicy)
+	h.Set("X-DNS-Prefetch-Control", "off")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Cache-Control", "private, no-store")
+}
+
 func (s *Server) contentCSP(frameAncestors string) string {
 	cdn := strings.Join(s.cfg.CDNs, " ")
 	return strings.Join([]string{
-		"sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads",
+		// no popups (links go through the shell), no alert/confirm/prompt
+		"sandbox allow-scripts allow-forms allow-downloads",
 		"default-src 'none'",
 		"script-src 'unsafe-inline' 'unsafe-eval' blob: data: " + cdn,
 		"style-src 'unsafe-inline' blob: data: " + cdn,
@@ -52,8 +69,8 @@ func (s *Server) contentCSP(frameAncestors string) string {
 		"media-src data: blob:",
 		"connect-src " + cdn,
 		"worker-src blob:",
-		"child-src blob: data:",
-		"frame-src blob: data:",
+		"child-src 'none'",
+		"frame-src 'none'",
 		"manifest-src 'none'",
 		"form-action 'none'",
 		"base-uri 'none'",
@@ -66,8 +83,11 @@ func (s *Server) shellCSP() string {
 	if s.base.Scheme == "http" {
 		ws = "ws://" + s.base.Host
 	}
+	// frame-src limits the artifact frame to /c/: browsers apply the parent's
+	// frame-src to the frame's own navigations too, so a page cannot take its
+	// frame to another site (leaking data in the URL) or to a vitrine page.
 	return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' " + ws +
-		"; frame-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
+		"; frame-src " + s.cfg.BaseURL + "/c/; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
 }
 
 func (s *Server) securityHeaders(w http.ResponseWriter) {
@@ -99,6 +119,10 @@ func (s *Server) renderPage(w http.ResponseWriter, name string, boot map[string]
 	tmplMu.Unlock()
 	bj, _ := json.Marshal(boot)
 	s.securityHeaders(w)
+	if boot["frameable"] == true { // the raw wrapper may be embedded anywhere
+		w.Header().Del("X-Frame-Options")
+		w.Header().Set("Content-Security-Policy", strings.Replace(s.shellCSP(), "frame-ancestors 'none'", "frame-ancestors *", 1))
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	t.Execute(w, map[string]any{"Boot": string(bj), "Title": boot["title"]})
@@ -189,24 +213,22 @@ func (s *Server) serveContent(w http.ResponseWriter, a *Artifact, html, mode, an
 	h := w.Header()
 	if a.Kind == kindMarkdown {
 		nonce := randToken("")[:22]
-		h.Set("Content-Type", "text/html; charset=utf-8")
-		h.Set("Content-Security-Policy", s.markdownCSP(nonce, ancestors))
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Cache-Control", "private, no-store")
+		contentHeaders(h, s.markdownCSP(nonce, ancestors))
 		w.Write([]byte(markdownPage(a.Title, html, nonce)))
 		return
 	}
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Content-Security-Policy", s.contentCSP(ancestors))
-	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("Cache-Control", "private, no-store")
+	contentHeaders(h, s.contentCSP(ancestors))
 	w.Write([]byte(injectRuntime(html, s.runtimeJS(mode))))
 }
 
 // handleFrame serves a version for the shell's sandboxed iframe.
 func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
+	// Only ever inside a frame: the parent's CSP is what keeps a page from
+	// navigating itself to another site. Opened directly, go to the viewer.
+	if r.Header.Get("Sec-Fetch-Dest") == "document" {
+		http.Redirect(w, r, "/a/"+r.PathValue("id")+"/v/"+r.PathValue("n"), http.StatusFound)
+		return
+	}
 	a, err := s.st.artifact(r.PathValue("id"))
 	if err != nil {
 		http.NotFound(w, r)
@@ -223,7 +245,11 @@ func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.serveContent(w, a, html, "frame", "'self'")
+	mode := "frame"
+	if r.URL.Query().Get("raw") == "1" {
+		mode = "raw"
+	}
+	s.serveContent(w, a, html, mode, "'self'")
 }
 
 func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
@@ -243,12 +269,10 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r)
 		return
 	}
-	html, err := s.st.versionHTML(a.ID, shown)
-	if err != nil {
-		s.notFound(w, r)
-		return
-	}
-	s.serveContent(w, a, html, "raw", "*")
+	// The bare page is still framed: a top-level page could navigate itself
+	// anywhere, a framed one is held to /c/ by this wrapper's CSP.
+	s.renderPage(w, "raw.html", map[string]any{"title": a.Title, "frameable": true,
+		"src": "/c/" + a.ID + "/" + strconv.Itoa(shown) + "?raw=1"})
 }
 
 // handleSource returns a version's stored text as-is: the markdown of a

@@ -53,6 +53,16 @@
     $('conn').className = 'dot' + (state.connected ? ' on' : '');
     $('conn').title = state.connected ? 'Live' : 'Reconnecting…';
   }
+  // A page can't navigate its frame elsewhere: this page's CSP allows frames
+  // from /c/ only, and browsers check that for the frame's own navigations.
+  // links and window.open from the page: http(s)/mailto only, on a real click only
+  function openOut(url) {
+    var u;
+    try { u = new URL(url); } catch (e) { return; }
+    if (!/^(https?|mailto):$/.test(u.protocol)) return;
+    if (navigator.userActivation && !navigator.userActivation.isActive) return;
+    window.open(u.href, '_blank', 'noopener,noreferrer');
+  }
   function load(n) {
     state.shown = n;
     state.pendingHead = 0;
@@ -253,6 +263,10 @@
     idb().then(function (db) { db.transaction('snaps', 'readwrite').objectStore('snaps').put(rec); }).catch(function () { });
   }
   function deliverSnap(key, doc, docs, fromCache) {
+    var pend = activeSubs.get(key);
+    if (!fromCache && pend && pend.cached) {
+      return pend.cached.then(function () { if (pend.cached) { pend.cached = null; } deliverSnap(key, doc, docs, false); });
+    }
     var i = key.indexOf(':');
     if (+key.slice(0, i) !== state.gen) return;
     var s = activeSubs.get(key);
@@ -289,9 +303,10 @@
   function routeOp(msg) {
     var key = msg.sub;
     if (msg.op === 'db.sub') {
-      activeSubs.set(key, { path: msg.path, q: msg.q, sig: JSON.stringify(msg.q || msg.path), real: false });
-      var sig = activeSubs.get(key).sig;
-      cacheGet(sig).then(function (v) { if (v) deliverSnap(key, v.doc, v.docs, true); });
+      var sub = { path: msg.path, q: msg.q, sig: JSON.stringify(msg.q || msg.path), real: false };
+      activeSubs.set(key, sub);
+      // the saved copy (if any) always goes first: live snapshots wait for this lookup
+      sub.cached = cacheGet(sub.sig).then(function (v) { if (v) deliverSnap(key, v.doc, v.docs, true); });
     } else if (msg.op === 'db.unsub') {
       activeSubs.delete(key); pollSubs.delete(key);
     }
@@ -313,7 +328,8 @@
   window.addEventListener('message', function (ev) {
     if (ev.source !== frame.contentWindow) return;
     var m = ev.data;
-    if (m && m.__vitrine_md === 1 && typeof m.y === 'number') { mdPos = m; return; }
+    if (m && m.__vitrine_md === 1) { if (typeof m.y === 'number') mdPos = m; return; }
+    if (m && m.__vitrine_open === 1 && typeof m.url === 'string') { openOut(m.url); return; }
     if (!m || m.__vitrine !== 1 || typeof m.nonce !== 'string') return;
     if (m.t === 'hello') {
       if (state.nonce === m.nonce) { if (helloInfoSent) answerHello(); return; }

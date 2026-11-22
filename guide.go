@@ -67,7 +67,9 @@ const guidePage = `# Page rules
   %s
   plus data: and blob: URLs. fetch/XHR/WebSocket to anything else is blocked. Images: data:/blob: or the CDNs above.
 - The page runs in a sandboxed iframe with an opaque origin: no cookies, no access to the parent; localStorage/sessionStorage may throw or be empty, so wrap them in try/catch and never use them for shared state.
-- Allowed: scripts, forms (no submission to servers), popups, alert/confirm, downloads. ES modules from esm.sh or jsdelivr work with <script type="module">.
+- Allowed: scripts, forms (handle submit in script with preventDefault(); nothing is sent to a server), downloads, workers from blob: URLs. ES modules from esm.sh or jsdelivr work with <script type="module">.
+- Not available: alert/confirm/prompt (they return at once: build dialogs into the page), iframes/object/embed (removed when inserted), WebRTC, <link rel=preconnect|dns-prefetch|prefetch>.
+- Links: a plain <a href="https://..."> opens in a new tab when clicked; window.open(url) does the same from a click handler and returns null. The page itself cannot navigate to another site.
 - window.claude exists before your scripts run and carries only use(name). Render the full single-viewer page first, then light features up when use() resolves (null after ~10 s without a viewer, at once in raw view).
 - Make it responsive (it is often opened on a phone) and readable in light and dark (prefers-color-scheme).
 - A new version reloads the iframe: state that must survive lives in db, not in JS variables.`
@@ -150,8 +152,8 @@ const guideMarkdown = `# markdown documents
 
 create(title?, markdown) makes a document. vitrine stores the markdown text as-is and renders it with a fixed viewer, so you write content, never layout. Title defaults to the first "# " heading.
 
-Supported (GitHub-flavored): headings (each gets an anchor id; 3+ h2/h3 get a contents sidebar on wide screens), **bold**, *italic*, ~~strike~~, links (auto-linked URLs too), images (https: or data:), > quotes, lists, - [ ] task lists, tables, footnotes[^1], definition lists, fenced code with a language (highlighted), and fenced mermaid blocks (rendered as diagrams).
-Raw HTML is allowed for formatting (<details>, <kbd>, <sub>, <br>, <mark>) but scripts, event handlers, forms and iframes do not run: a document has no runtime and no capabilities. Need interactivity? Make an html artifact instead.
+Supported (GitHub-flavored): headings (each gets an anchor id; 3+ h2/h3 get a contents sidebar on wide screens), **bold**, *italic*, ~~strike~~, links (open in a new tab), images (data: URLs or the CDN allowlist; other hosts are blocked), > quotes, lists, - [ ] task lists, tables, footnotes[^1], definition lists, fenced code with a language (highlighted), and fenced mermaid blocks (rendered as diagrams).
+Raw HTML is allowed for formatting (<details>, <kbd>, <sub>, <br>, <mark>); anything else (script, style, link, meta, iframe, form, event handlers, inline style) is stripped: a document has no runtime and no capabilities. Need interactivity? Make an html artifact instead.
 
 Editing: edit's old_text/new_text work on the markdown text, so small changes are cheap; rewrite replaces the whole document. Readers' open views reload in place and keep their scroll position.
 Links between artifacts: use their full https URL.`

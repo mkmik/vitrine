@@ -2,13 +2,35 @@
 (function () {
   'use strict';
   var doc = document.getElementById('doc');
-  var CDN = 'https://cdn.jsdelivr.net/npm/';
+  // pinned, and checked against these hashes before they run
+  var LIBS = {
+    mermaid: ['https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js',
+      'sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2'],
+    hljs: ['https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.12.0/highlight.min.js',
+      'sha384-wjfDDhOPPdjtva8vWBhWeVprSpmxisEu5aYT3q1JyACqXpdKpo3PWZTMVq24MBix']
+  };
+  function lib(name) {
+    return new Promise(function (res, rej) {
+      if (window[name]) return res(window[name]);
+      var s = document.createElement('script');
+      s.src = LIBS[name][0]; s.integrity = LIBS[name][1]; s.crossOrigin = 'anonymous';
+      s.onload = function () { window[name] ? res(window[name]) : rej(new Error(name)); };
+      s.onerror = rej;
+      document.head.appendChild(s);
+    });
+  }
   var dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
 
-  // links leave the sandbox in a new tab; in-page anchors stay
-  doc.querySelectorAll('a[href]').forEach(function (a) {
+  // links open in a new tab through the viewer around this frame (the
+  // sandbox has no popups); in-page anchors stay
+  document.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button !== 0 || !e.target.closest) return;
+    var a = e.target.closest('a[href]');
+    if (!a) return;
     var h = a.getAttribute('href');
-    if (h && h.charAt(0) !== '#') { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+    if (!h || h.charAt(0) === '#') return;
+    e.preventDefault();
+    try { parent.postMessage({ __vitrine_open: 1, url: a.href }, '*'); } catch (x) { }
   });
 
   // wide tables scroll on their own instead of widening the page
@@ -87,8 +109,7 @@
       var d = document.createElement('div'); d.className = 'mermaid'; d.textContent = c.textContent;
       d._pre = c.parentNode; c.parentNode.replaceWith(d); return d;
     });
-    import(CDN + 'mermaid@11/dist/mermaid.esm.min.mjs').then(function (mod) {
-      var mermaid = mod.default;
+    lib('mermaid').then(function (mermaid) {
       mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' });
       return mermaid.run({ nodes: nodes, suppressErrors: true });
     }).catch(function () {
@@ -99,8 +120,7 @@
   // code highlighting
   var code = [].slice.call(doc.querySelectorAll('pre > code[class*="language-"]'));
   if (code.length) {
-    import(CDN + '@highlightjs/cdn-assets@11/es/highlight.min.js').then(function (mod) {
-      var hljs = mod.default;
+    lib('hljs').then(function (hljs) {
       hljs.configure({ ignoreUnescapedHTML: true });
       code.forEach(function (c) {
         var lang = (/language-([\w+#-]+)/.exec(c.className) || [])[1];

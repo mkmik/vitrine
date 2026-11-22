@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"html"
+	"regexp"
 	"strings"
 	"sync"
 
+	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
@@ -21,21 +23,36 @@ const (
 
 func validKind(k string) bool { return k == kindHTML || k == kindMarkdown }
 
-// Raw HTML inside markdown is passed through (details, kbd, sub, br, tables
-// with attributes...). It cannot run: the markdown page's CSP only allows the
-// renderer's own nonce-tagged script.
+// Raw HTML inside markdown is rendered, then everything goes through an
+// allowlist sanitizer: formatting tags (details, kbd, sub, mark...) survive;
+// script, style, link, meta, iframe, form and event handlers do not. The page
+// CSP (renderer's nonce only) is a second wall behind it.
 var mdEngine = goldmark.New(
 	goldmark.WithExtensions(extension.GFM, extension.Footnote, extension.DefinitionList),
 	goldmark.WithParserOptions(parser.WithAutoHeadingID()),
 	goldmark.WithRendererOptions(ghtml.WithUnsafe()),
 )
 
+var mdPolicy = sync.OnceValue(func() *bluemonday.Policy {
+	p := bluemonday.UGCPolicy()
+	p.AllowElements("details", "summary", "kbd", "mark", "ins", "del", "s", "abbr", "figure", "figcaption")
+	p.AllowAttrs("open").OnElements("details")
+	p.AllowAttrs("class").Matching(regexp.MustCompile(`^[\w\- ]{1,100}$`)).Globally()
+	p.AllowAttrs("role").Matching(regexp.MustCompile(`^doc-[a-z]+$`)).Globally()
+	p.AllowAttrs("type").Matching(regexp.MustCompile(`^checkbox$`)).OnElements("input")
+	p.AllowAttrs("checked", "disabled").OnElements("input")
+	p.AllowStyles("text-align").MatchingEnum("left", "right", "center").OnElements("th", "td")
+	p.AllowAttrs("align").Matching(regexp.MustCompile(`^(left|right|center)$`)).OnElements("th", "td")
+	p.AllowDataURIImages()
+	return p
+})
+
 func renderMarkdown(src string) (string, error) {
 	var b bytes.Buffer
 	if err := mdEngine.Convert([]byte(src), &b); err != nil {
 		return "", err
 	}
-	return b.String(), nil
+	return mdPolicy().Sanitize(b.String()), nil
 }
 
 var mdAssets = sync.OnceValues(func() (string, string) {
@@ -68,18 +85,19 @@ func markdownPage(title, src, nonce string) string {
 }
 
 // markdownCSP is the content CSP with scripts limited to the renderer
-// (nonce + strict-dynamic, so it may lazy-load mermaid / highlight.js) and
-// images allowed from any https host, as documents usually link them.
+// (nonce + strict-dynamic, so it may load pinned mermaid / highlight.js).
+// Images come only from data: URLs and the CDN allowlist: a remote image is
+// a way to leak data to whoever hosts it.
 func (s *Server) markdownCSP(nonce, frameAncestors string) string {
 	cdn := strings.Join(s.cfg.CDNs, " ")
 	return strings.Join([]string{
-		"sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads",
+		"sandbox allow-scripts",
 		"default-src 'none'",
 		"script-src 'nonce-" + nonce + "' 'strict-dynamic'",
 		"style-src 'unsafe-inline' " + cdn,
 		"font-src data: " + cdn,
-		"img-src data: blob: https:",
-		"media-src data: blob: https:",
+		"img-src data: blob: " + cdn,
+		"media-src data: blob:",
 		"connect-src 'none'",
 		"frame-src 'none'",
 		"form-action 'none'",
