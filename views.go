@@ -1,0 +1,433 @@
+package main
+
+import (
+	"encoding/json"
+	"html/template"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+var (
+	headRE    = regexp.MustCompile(`(?i)<head(\s[^>]*)?>`)
+	htmlTagRE = regexp.MustCompile(`(?i)<html(\s[^>]*)?>`)
+	doctypeRE = regexp.MustCompile(`(?i)^\s*<!doctype[^>]*>`)
+)
+
+func injectRuntime(html, script string) string {
+	tag := "<script>" + script + "</script>"
+	if loc := headRE.FindStringIndex(html); loc != nil {
+		return html[:loc[1]] + tag + html[loc[1]:]
+	}
+	if loc := htmlTagRE.FindStringIndex(html); loc != nil {
+		return html[:loc[1]] + tag + html[loc[1]:]
+	}
+	if loc := doctypeRE.FindStringIndex(html); loc != nil {
+		return html[:loc[1]] + tag + html[loc[1]:]
+	}
+	return tag + html
+}
+
+var runtimeSrc = sync.OnceValue(func() string {
+	b, _ := webFS.ReadFile("web/runtime.js")
+	return strings.ReplaceAll(string(b), "</script", "<\\/script")
+})
+
+func (s *Server) runtimeJS(mode string) string {
+	cfg, _ := json.Marshal(map[string]string{"mode": mode})
+	return "window.__vitrine_cfg=" + string(cfg) + ";\n" + runtimeSrc()
+}
+
+func (s *Server) contentCSP(frameAncestors string) string {
+	cdn := strings.Join(s.cfg.CDNs, " ")
+	return strings.Join([]string{
+		"sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads",
+		"default-src 'none'",
+		"script-src 'unsafe-inline' 'unsafe-eval' blob: data: " + cdn,
+		"style-src 'unsafe-inline' blob: data: " + cdn,
+		"font-src data: blob: " + cdn,
+		"img-src data: blob: " + cdn,
+		"media-src data: blob:",
+		"connect-src " + cdn,
+		"worker-src blob:",
+		"child-src blob: data:",
+		"frame-src blob: data:",
+		"manifest-src 'none'",
+		"form-action 'none'",
+		"base-uri 'none'",
+		"frame-ancestors " + frameAncestors,
+	}, "; ")
+}
+
+func (s *Server) shellCSP() string {
+	ws := "wss://" + s.base.Host
+	if s.base.Scheme == "http" {
+		ws = "ws://" + s.base.Host
+	}
+	return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' " + ws +
+		"; frame-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
+}
+
+func (s *Server) securityHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "same-origin")
+	h.Set("Content-Security-Policy", s.shellCSP())
+	h.Set("X-Frame-Options", "DENY")
+}
+
+// page serves one of the app's HTML pages with boot data.
+func (s *Server) page(name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { s.renderPage(w, name, s.bootFor(r, nil)) }
+}
+
+var (
+	tmplMu   sync.Mutex
+	pageTmpl = map[string]*template.Template{}
+)
+
+func (s *Server) renderPage(w http.ResponseWriter, name string, boot map[string]any) {
+	tmplMu.Lock()
+	t, ok := pageTmpl[name]
+	if !ok {
+		b, _ := webFS.ReadFile("web/" + name)
+		t = template.Must(template.New(name).Parse(string(b)))
+		pageTmpl[name] = t
+	}
+	tmplMu.Unlock()
+	bj, _ := json.Marshal(boot)
+	s.securityHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	t.Execute(w, map[string]any{"Boot": string(bj), "Title": boot["title"]})
+}
+
+func (s *Server) bootFor(r *http.Request, extra map[string]any) map[string]any {
+	b := map[string]any{"base": s.cfg.BaseURL, "auth": s.cfg.Auth, "mcp_url": s.cfg.BaseURL + "/mcp", "title": "Artifacts", "version": version,
+		"sample": s.cfg.LLMURL != ""}
+	if ss := s.sessionOf(r); ss != nil {
+		b["user"] = map[string]string{"id": ss.User.ID, "email": ss.User.Email, "name": ss.User.DisplayName()}
+		b["csrf"] = ss.CSRF
+		b["can_create"] = s.mayCreate(ss.User)
+	}
+	for k, v := range extra {
+		b[k] = v
+	}
+	return b
+}
+
+// resolveView decides which version a viewer may see. n = 0 means "default".
+func (s *Server) resolveView(a *Artifact, acc Access, n int) (shown int, follow bool, ok bool) {
+	if acc.Level == lvNone {
+		return 0, false, false
+	}
+	if n == 0 {
+		if acc.Pinned > 0 {
+			return acc.Pinned, false, true
+		}
+		return a.Head, true, true
+	}
+	if n < 1 || n > a.Head {
+		return 0, false, false
+	}
+	if acc.Level >= lvEdit || n == acc.Pinned || (acc.Pinned == 0 && n == a.Head) {
+		return n, false, true
+	}
+	return 0, false, false
+}
+
+func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
+	s.securityHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(404)
+	signin := ""
+	if s.userOf(r) == nil {
+		signin = `<p><a href="` + htmlEsc(s.loginURL(r.URL.RequestURI())) + `">Sign in</a> if this was shared with you.</p>`
+	}
+	w.Write([]byte(`<!doctype html><meta name=viewport content="width=device-width"><link rel=stylesheet href="/static/app.css"><main class="empty"><h1>Not found</h1><p>This artifact does not exist, or you don't have access to it.</p>` + signin + `<p><a href="/">All artifacts</a></p></main>`))
+}
+
+func pathInt(r *http.Request, k string) int {
+	n, _ := strconv.Atoi(r.PathValue(k))
+	return n
+}
+
+func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
+	a, err := s.st.artifact(r.PathValue("id"))
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	u := s.userOf(r)
+	acc := s.st.accessFor(a, u)
+	if acc.Level == lvNone && u == nil {
+		http.Redirect(w, r, s.loginURL(r.URL.RequestURI()), http.StatusFound)
+		return
+	}
+	n := pathInt(r, "n")
+	shown, follow, ok := s.resolveView(a, acc, n)
+	if !ok {
+		if acc.Level != lvNone && n != 0 {
+			http.Redirect(w, r, "/a/"+a.ID, http.StatusFound)
+			return
+		}
+		s.notFound(w, r)
+		return
+	}
+	s.renderPage(w, "shell.html", s.bootFor(r, map[string]any{
+		"title": a.Title, "artifact": map[string]any{
+			"id": a.ID, "title": a.Title, "description": a.Description, "head": a.Head, "shown": shown, "follow": follow,
+			"pinned": acc.Pinned, "level": levelName(acc.Level), "caps": a.Caps().Names, "url": s.artifactURL(a.ID),
+			"updated_at": a.UpdatedAt,
+		},
+	}))
+}
+
+func (s *Server) serveContent(w http.ResponseWriter, html, mode, ancestors string) {
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Security-Policy", s.contentCSP(ancestors))
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Cache-Control", "private, no-store")
+	w.Write([]byte(injectRuntime(html, s.runtimeJS(mode))))
+}
+
+// handleFrame serves a version for the shell's sandboxed iframe.
+func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
+	a, err := s.st.artifact(r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	acc := s.st.accessFor(a, s.userOf(r))
+	shown, _, ok := s.resolveView(a, acc, pathInt(r, "n"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	html, err := s.st.versionHTML(a.ID, shown)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.serveContent(w, html, "frame", "'self'")
+}
+
+func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
+	a, err := s.st.artifact(r.PathValue("id"))
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	u := s.userOf(r)
+	acc := s.st.accessFor(a, u)
+	if acc.Level == lvNone && u == nil {
+		http.Redirect(w, r, s.loginURL(r.URL.RequestURI()), http.StatusFound)
+		return
+	}
+	shown, _, ok := s.resolveView(a, acc, pathInt(r, "n"))
+	if !ok {
+		s.notFound(w, r)
+		return
+	}
+	html, err := s.st.versionHTML(a.ID, shown)
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	s.serveContent(w, html, "raw", "*")
+}
+
+// ---- UI API ----
+
+func (s *Server) apiMe(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.bootFor(r, nil)) }
+
+func (s *Server) apiList(w http.ResponseWriter, r *http.Request) {
+	ss := s.apiSession(w, r)
+	if ss == nil {
+		return
+	}
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	items, err := s.st.listFor(ss.User, r.URL.Query().Get("q"), 60, before)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	for i := range items {
+		acc := s.st.accessFor(items[i].Artifact, ss.User)
+		items[i].Level = levelName(acc.Level)
+		if acc.Level == lvOwner {
+			items[i].Grants, _ = s.st.grants(items[i].ID)
+		}
+	}
+	if items == nil {
+		items = []ListItem{}
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) loadForAPI(w http.ResponseWriter, r *http.Request, need int) (*Session, *Artifact, Access) {
+	ss := s.apiSession(w, r)
+	if ss == nil {
+		return nil, nil, Access{}
+	}
+	a, err := s.st.artifact(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "not_found"})
+		return nil, nil, Access{}
+	}
+	acc := s.st.accessFor(a, ss.User)
+	if acc.Level < need {
+		code := 403
+		if acc.Level == lvNone {
+			code = 404
+		}
+		writeJSON(w, code, map[string]string{"error": "not_permitted"})
+		return nil, nil, Access{}
+	}
+	return ss, a, acc
+}
+
+func (s *Server) apiArtifact(w http.ResponseWriter, r *http.Request) {
+	_, a, acc := s.loadForAPI(w, r, lvView)
+	if a == nil {
+		return
+	}
+	out := map[string]any{"artifact": a, "level": levelName(acc.Level), "pinned": acc.Pinned, "url": s.artifactURL(a.ID)}
+	if acc.Level == lvOwner {
+		out["grants"], _ = s.st.grants(a.ID)
+	}
+	writeJSON(w, 200, out)
+}
+
+func (s *Server) apiHistory(w http.ResponseWriter, r *http.Request) {
+	_, a, _ := s.loadForAPI(w, r, lvEdit)
+	if a == nil {
+		return
+	}
+	vs, _ := s.st.versions(a.ID)
+	writeJSON(w, 200, map[string]any{"head": a.Head, "versions": vs})
+}
+
+func readBody(r *http.Request, v any) error {
+	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20)).Decode(v)
+}
+
+func (s *Server) apiRestore(w http.ResponseWriter, r *http.Request) {
+	ss, a, _ := s.loadForAPI(w, r, lvEdit)
+	if a == nil {
+		return
+	}
+	var req struct {
+		Version int `json:"version"`
+	}
+	readBody(r, &req)
+	na, err := s.opRestore(a.ID, req.Version, a.Head, "user:"+ss.User.Email)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"head": na.Head})
+}
+
+func (s *Server) apiShare(w http.ResponseWriter, r *http.Request) {
+	_, a, _ := s.loadForAPI(w, r, lvOwner)
+	if a == nil {
+		return
+	}
+	var req struct {
+		Who     string `json:"who"`
+		Level   string `json:"level"`
+		Version int    `json:"version"`
+	}
+	if err := readBody(r, &req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad json"})
+		return
+	}
+	gs, err := s.opShare(a, req.Who, req.Level, req.Version)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"grants": gs})
+}
+
+func (s *Server) apiMeta(w http.ResponseWriter, r *http.Request) {
+	_, a, _ := s.loadForAPI(w, r, lvEdit)
+	if a == nil {
+		return
+	}
+	var req struct {
+		Title       *string `json:"title"`
+		Description *string `json:"description"`
+	}
+	readBody(r, &req)
+	na, err := s.st.setMeta(a.ID, req.Title, req.Description)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	s.hub.artifactChanged(na)
+	writeJSON(w, 200, map[string]any{"artifact": na})
+}
+
+func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {
+	_, a, _ := s.loadForAPI(w, r, lvOwner)
+	if a == nil {
+		return
+	}
+	if err := s.st.deleteArtifact(a.ID); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	s.hub.artifactDeleted(a.ID)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) apiTokens(w http.ResponseWriter, r *http.Request) {
+	ss := s.apiSession(w, r)
+	if ss == nil {
+		return
+	}
+	ts, _ := s.st.listTokens(ss.User.ID)
+	if ts == nil {
+		ts = []TokenInfo{}
+	}
+	writeJSON(w, 200, map[string]any{"tokens": ts})
+}
+
+func (s *Server) apiCreateToken(w http.ResponseWriter, r *http.Request) {
+	ss := s.apiSession(w, r)
+	if ss == nil {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	readBody(r, &req)
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = "token"
+	}
+	t, err := s.st.createPAT(ss.User.ID, name)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"token": t})
+}
+
+func (s *Server) apiRevokeToken(w http.ResponseWriter, r *http.Request) {
+	ss := s.apiSession(w, r)
+	if ss == nil {
+		return
+	}
+	if err := s.st.revokeToken(ss.User.ID, r.PathValue("tid")); err != nil {
+		writeJSON(w, 404, map[string]string{"error": "not_found"})
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}

@@ -1,0 +1,186 @@
+// vitrine is a self-hosted artifact server: agents create, read and iterate on
+// single-file HTML artifacts over MCP; people view them in a shell that live
+// reloads, shares, and gives pages a Claude-artifacts-compatible runtime
+// (db, room, sample, user).
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+const version = "0.1.0"
+
+type Config struct {
+	Addr            string
+	BaseURL         string
+	DBPath          string
+	Auth            string // exedev | oidc | dev
+	OIDCIssuer      string
+	OIDCClientID    string
+	OIDCSecret      string
+	OIDCScopes      string
+	AllowSignIn     []string // emails or @domains; empty = anyone the IdP signs in
+	Creators        []string // emails or @domains allowed to create; empty = any user
+	LLMURL          string   // Anthropic-Messages-compatible base, e.g. https://llm.int.exe.xyz
+	LLMHeader       string   // optional "Name: value" added to LLM requests
+	ModelQuick      string
+	ModelDefault    string
+	ModelComplex    string
+	CDNs            []string
+	RedirectHosts   []string // extra hosts allowed as OAuth redirect URIs
+	MaxVersionBytes int
+	MaxDocBytes     int
+	MaxDocs         int
+	SampleRPM       int
+}
+
+func env(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
+func envInt(k string, def int) int {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' }) {
+		if p = strings.ToLower(strings.TrimSpace(p)); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func loadConfig() *Config {
+	return &Config{
+		Addr:            env("VITRINE_ADDR", "127.0.0.1:8787"),
+		BaseURL:         strings.TrimRight(env("VITRINE_BASE_URL", "http://127.0.0.1:8787"), "/"),
+		DBPath:          env("VITRINE_DB", "vitrine.db"),
+		Auth:            env("VITRINE_AUTH", "exedev"),
+		OIDCIssuer:      env("VITRINE_OIDC_ISSUER", ""),
+		OIDCClientID:    env("VITRINE_OIDC_CLIENT_ID", ""),
+		OIDCSecret:      env("VITRINE_OIDC_CLIENT_SECRET", ""),
+		OIDCScopes:      env("VITRINE_OIDC_SCOPES", "openid email profile"),
+		AllowSignIn:     splitList(env("VITRINE_ALLOW_SIGNIN", "")),
+		Creators:        splitList(env("VITRINE_CREATORS", "")),
+		LLMURL:          strings.TrimRight(env("VITRINE_LLM_URL", ""), "/"),
+		LLMHeader:       env("VITRINE_LLM_HEADER", ""),
+		ModelQuick:      env("VITRINE_MODEL_QUICK", "claude-haiku-5-5"),
+		ModelDefault:    env("VITRINE_MODEL_DEFAULT", "claude-sonnet-5-5"),
+		ModelComplex:    env("VITRINE_MODEL_COMPLEX", "claude-opus-5-5"),
+		CDNs:            splitList(env("VITRINE_CDNS", "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://esm.sh https://cdn.tailwindcss.com https://fonts.googleapis.com https://fonts.gstatic.com")),
+		RedirectHosts:   splitList(env("VITRINE_OAUTH_REDIRECT_HOSTS", "")),
+		MaxVersionBytes: envInt("VITRINE_MAX_VERSION_BYTES", 16<<20),
+		MaxDocBytes:     envInt("VITRINE_MAX_DOC_BYTES", 256<<10),
+		MaxDocs:         envInt("VITRINE_MAX_DOCS", 25000),
+		SampleRPM:       envInt("VITRINE_SAMPLE_RPM", 30),
+	}
+}
+
+func main() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "backup":
+			cmdBackup(os.Args[2:])
+			return
+		case "import":
+			cmdImport(os.Args[2:])
+			return
+		case "token":
+			cmdToken(os.Args[2:])
+			return
+		case "version":
+			fmt.Println("vitrine", version)
+			return
+		case "serve":
+			os.Args = append(os.Args[:1], os.Args[2:]...)
+		}
+	}
+	flag.Parse()
+	cfg := loadConfig()
+	st, err := openStore(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+	srv, err := newServer(cfg, st)
+	if err != nil {
+		log.Fatalf("server: %v", err)
+	}
+	hs := &http.Server{Addr: cfg.Addr, Handler: srv.routes(), ReadHeaderTimeout: 15 * time.Second}
+	go srv.gcLoop()
+	go func() {
+		log.Printf("vitrine %s listening on %s (base %s, auth %s)", version, cfg.Addr, cfg.BaseURL, cfg.Auth)
+		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hs.Shutdown(ctx)
+	st.db.Close()
+}
+
+func cmdBackup(args []string) {
+	fs := flag.NewFlagSet("backup", flag.ExitOnError)
+	out := fs.String("o", "", "output file (required)")
+	fs.Parse(args)
+	if *out == "" {
+		log.Fatal("backup: -o required")
+	}
+	st, err := openStore(loadConfig().DBPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := st.db.Exec(`VACUUM INTO ?`, *out); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("backup written to", *out)
+}
+
+// token mints a personal API token for a user (by email) from the command line.
+func cmdToken(args []string) {
+	fs := flag.NewFlagSet("token", flag.ExitOnError)
+	email := fs.String("email", "", "user email (must have signed in once, or use -create)")
+	name := fs.String("name", "cli", "token name")
+	create := fs.Bool("create", false, "create the user if missing")
+	fs.Parse(args)
+	st, err := openStore(loadConfig().DBPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	u, err := st.userByEmail(strings.ToLower(*email))
+	if err != nil && *create {
+		u, err = st.upsertUser("local|"+strings.ToLower(*email), strings.ToLower(*email), "")
+	}
+	if err != nil {
+		log.Fatalf("user %s: %v", *email, err)
+	}
+	tok, err := st.createPAT(u.ID, *name)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(tok)
+}

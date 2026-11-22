@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{.Title}}</title>
+<link rel="icon" href="/static/favicon.svg">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/shell.js" defer></script>
+</head>
+<body class="shell" data-boot="{{.Boot}}">
+<header class="bar">
+  <a class="home" href="/" title="All artifacts" aria-label="All artifacts"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 5h7v6H4zM13 5h7v4h-7zM13 11h7v8h-7zM4 13h7v6H4z" fill="currentColor"/></svg></a>
+  <div class="title" id="title"></div>
+  <span class="ver" id="ver"></span>
+  <button class="badge" id="badge" hidden></button>
+  <span class="dot" id="conn" title="Live connection"></span>
+  <div class="spacer"></div>
+  <label class="toggle" id="autoWrap" title="Reload by itself when a new version lands"><input type="checkbox" id="auto"><span>Auto-refresh</span></label>
+  <button class="icon" id="reload" title="Reload" aria-label="Reload"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  <button class="icon" id="historyBtn" title="History" aria-label="History" hidden><svg viewBox="0 0 24 24" width="17" height="17"><path d="M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  <a class="icon" id="raw" title="Open the bare page" aria-label="Open the bare page" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+  <button class="primary small" id="shareBtn" hidden>Share</button>
+  <button class="small" id="copyBtn" hidden>Copy link</button>
+</header>
+<main class="stage">
+  <iframe id="frame" title="artifact" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads" allow="fullscreen; clipboard-write" referrerpolicy="no-referrer"></iframe>
+  <div class="gone" id="gone" hidden></div>
+</main>
+<aside class="panel" id="history" hidden>
+  <div class="panel-head"><b>History</b><button class="icon" data-close aria-label="Close">✕</button></div>
+  <ol class="versions" id="versions"></ol>
+</aside>
+<dialog id="share">
+  <form method="dialog" class="dlg">
+    <div class="panel-head"><b>Share</b><button class="icon" value="close" aria-label="Close">✕</button></div>
+    <p class="muted small" id="shareUrl"></p>
+    <div class="grants" id="grants"></div>
+    <div class="add">
+      <input id="who" placeholder="email, or “users”, or “public”" autocomplete="off">
+      <select id="lvl"><option value="view">can view</option><option value="interact">can interact</option><option value="edit">can edit</option></select>
+      <select id="pin"><option value="0">live</option></select>
+      <button class="primary" id="grantBtn" value="">Add</button>
+    </div>
+    <p class="muted small">“users” is everyone who can sign in here; “public” is anyone with the link (view or interact). Interact also lets people write the page's shared data. A pinned grant shows a fixed version.</p>
+    <p class="err" id="shareErr"></p>
+  </form>
+</dialog>
+<dialog id="consent">
+  <form method="dialog" class="dlg">
+    <h3>Let this page use AI?</h3>
+    <p>This artifact wants to send text to a model on your behalf. The model only sees what the page sends.</p>
+    <div class="row"><button value="allow" class="primary">Allow</button><button value="deny">Don't allow</button></div>
+  </form>
+</dialog>
+</body>
+</html>
