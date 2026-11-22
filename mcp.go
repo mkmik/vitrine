@@ -35,8 +35,8 @@ type rpcErr struct {
 	Message string `json:"message"`
 }
 
-const serverInstructions = `vitrine hosts single-file HTML artifacts (explainers, diagrams, prototypes, interactive apps) at stable links.
-Create one with create and give the user the link. To iterate, use edit (exact find-and-replace) or rewrite (whole page), always passing base_version = the version you last saw; open views reload by themselves. When the user pastes a link, call read first.
+const serverInstructions = `vitrine hosts artifacts at stable links: single-file HTML pages (explainers, diagrams, prototypes, interactive apps) and markdown documents (specs, PRDs, notes, reports), which vitrine renders itself.
+Create one with create (pass html for a page, markdown for a document) and give the user the link. To iterate, use edit (exact find-and-replace) or rewrite (whole page), always passing base_version = the version you last saw; open views reload by themselves. When the user pastes a link, call read first.
 Pages can keep shared data (db), see who else is here (room), call a model (sample) and know the viewer (user) through await claude.use(name), the same API as Claude artifacts. Call guide before writing a page that uses them.`
 
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
@@ -203,26 +203,27 @@ func toolDefs() []map[string]any {
 	idArg := str("Artifact id, or any link to it (a pasted URL works).")
 	return []map[string]any{
 		{"name": "guide", "description": "Runtime docs for artifact pages: page rules, the CDN allowlist, and the db / room / sample / user capabilities behind await claude.use(name), with patterns. Call before writing a page that keeps data, shows other viewers, or calls a model.",
-			"inputSchema": schema(map[string]any{"topic": map[string]any{"type": "string", "enum": []string{"overview", "page", "db", "room", "sample", "user", "patterns", "all"}, "description": "Default overview."}}),
+			"inputSchema": schema(map[string]any{"topic": map[string]any{"type": "string", "enum": []string{"overview", "markdown", "page", "db", "room", "sample", "user", "patterns", "all"}, "description": "Default overview."}}),
 			"annotations": readOnly},
-		{"name": "create", "description": "Create a new artifact from one self-contained HTML file. Returns its stable link (give it to the user) and version 1. Pages can use shared storage, presence and AI through claude.use(): call guide first for those. Scripts and styles load only from the CDN allowlist; no other network access.",
+		{"name": "create", "description": "Create a new artifact. Pass exactly one of: html (one self-contained HTML page) or markdown (a document: GitHub-flavored markdown with tables, task lists, footnotes and ```mermaid diagrams, rendered by vitrine). Returns its stable link (give it to the user) and version 1. HTML pages can use shared storage, presence and AI through claude.use(): call guide first for those; their scripts and styles load only from the CDN allowlist. Prefer markdown for writing that people read and keep (specs, plans, notes, reports).",
 			"inputSchema": schema(map[string]any{
-				"title":        str("Short title."),
-				"html":         str("The complete HTML document."),
+				"title":        str("Short title. For markdown it defaults to the first # heading."),
+				"html":         str("The complete HTML document (for a page)."),
+				"markdown":     str("The complete markdown text (for a document)."),
 				"description":  str("Optional one-line description, used in listings and search."),
-				"capabilities": map[string]any{"type": "object", "description": `Optional declaration, e.g. {"db":{},"user":{"scopes":["profile"]},"room":{},"sample":{}}. See guide.`},
-			}, "title", "html")},
-		{"name": "read", "description": "Read an artifact: the HTML of its head (or a given version), the head version, title and capabilities. Call this when the user pastes a link, and before editing a page you did not just write.",
+				"capabilities": map[string]any{"type": "object", "description": `HTML pages only. Optional declaration, e.g. {"db":{},"user":{"scopes":["profile"]},"room":{},"sample":{}}. See guide.`},
+			})},
+		{"name": "read", "description": "Read an artifact: its kind (html or markdown), the content of its head (or a given version), the head version, title and capabilities. Call this when the user pastes a link, and before editing an artifact you did not just write.",
 			"inputSchema": schema(map[string]any{"id": idArg, "version": num("Optional version; default the head.")}, "id"),
 			"annotations": readOnly},
-		{"name": "edit", "description": "Change an artifact with exact find-and-replace edits, applied in order. Each old_text must occur exactly once; all edits apply or none do. Creates a new version; open views reload. base_version must be the head you last saw, or the call is refused with the current head.",
+		{"name": "edit", "description": "Change an artifact's content (HTML or markdown text) with exact find-and-replace edits, applied in order. Each old_text must occur exactly once; all edits apply or none do. Creates a new version; open views reload. base_version must be the head you last saw, or the call is refused with the current head.",
 			"inputSchema": schema(map[string]any{
 				"id": idArg, "base_version": num("The version these edits apply to (the head)."),
 				"edits": map[string]any{"type": "array", "items": schema(map[string]any{"old_text": str("Exact text to replace."), "new_text": str("Replacement (may be empty).")}, "old_text", "new_text")},
 				"title": str("Optional new title."),
 			}, "id", "base_version", "edits")},
-		{"name": "rewrite", "description": "Replace an artifact's whole HTML, creating a new version; open views reload. base_version must be the head you last saw.",
-			"inputSchema": schema(map[string]any{"id": idArg, "base_version": num("The head you last saw."), "html": str("The complete new HTML."), "title": str("Optional new title."), "description": str("Optional new description.")}, "id", "base_version", "html")},
+		{"name": "rewrite", "description": "Replace an artifact's whole content, creating a new version; open views reload. Pass html for an html artifact or markdown for a markdown one (the kind cannot change). base_version must be the head you last saw.",
+			"inputSchema": schema(map[string]any{"id": idArg, "base_version": num("The head you last saw."), "html": str("The complete new HTML (html artifacts)."), "markdown": str("The complete new markdown (markdown artifacts)."), "title": str("Optional new title."), "description": str("Optional new description.")}, "id", "base_version")},
 		{"name": "list", "description": "List artifacts you own or that are shared with you, newest first.",
 			"inputSchema": schema(map[string]any{"limit": num("Default 30, max 200."), "before": num("Pagination: updated_at of the last item seen.")}),
 			"annotations": readOnly},
@@ -253,7 +254,7 @@ func toolDefs() []map[string]any {
 }
 
 func (s *Server) artifactSummary(a *Artifact) map[string]any {
-	return map[string]any{"id": a.ID, "url": s.artifactURL(a.ID), "title": a.Title, "description": a.Description, "version": a.Head,
+	return map[string]any{"id": a.ID, "url": s.artifactURL(a.ID), "kind": a.Kind, "title": a.Title, "description": a.Description, "version": a.Head,
 		"updated_at": time.Unix(a.UpdatedAt, 0).UTC().Format(time.RFC3339), "capabilities": a.Capabilities}
 }
 
@@ -262,6 +263,7 @@ type toolArgs struct {
 	Title        *string         `json:"title"`
 	Description  *string         `json:"description"`
 	HTML         string          `json:"html"`
+	Markdown     string          `json:"markdown"`
 	Capabilities json.RawMessage `json:"capabilities"`
 	Version      int             `json:"version"`
 	BaseVersion  *int            `json:"base_version"`
@@ -301,11 +303,27 @@ func (s *Server) callTool(p *Principal, ms *mcpSession, name string, args json.R
 		}
 		return *p
 	}
+	// content picks the html or markdown argument; exactly one must be given.
+	content := func() (string, string, *toolResult) {
+		switch {
+		case a.HTML != "" && a.Markdown != "":
+			return "", "", toolError("invalid_argument", "pass html or markdown, not both", nil)
+		case a.Markdown != "":
+			return kindMarkdown, a.Markdown, nil
+		case a.HTML != "":
+			return kindHTML, a.HTML, nil
+		}
+		return "", "", toolError("invalid_argument", "pass the content as html (a page) or markdown (a document)", nil)
+	}
 	switch name {
 	case "guide":
 		return &toolResult{Content: []map[string]any{{"type": "text", "text": guideText(a.Topic, s.cfg)}}}
 	case "create":
-		art, warnings, err := s.opCreate(p, deref(a.Title), deref(a.Description), a.HTML, a.Capabilities)
+		kind, text, e := content()
+		if e != nil {
+			return e
+		}
+		art, warnings, err := s.opCreate(p, kind, deref(a.Title), deref(a.Description), text, a.Capabilities)
 		if err != nil {
 			return errResult(err)
 		}
@@ -361,7 +379,11 @@ func (s *Server) callTool(p *Principal, ms *mcpSession, name string, args json.R
 		if e != nil {
 			return e
 		}
-		art, err := s.opRewrite(p, a.ID, base, a.HTML, a.Title, a.Description)
+		kind, text, ce := content()
+		if ce != nil {
+			return ce
+		}
+		art, err := s.opRewrite(p, a.ID, base, kind, text, a.Title, a.Description)
 		if err != nil {
 			return errResult(err)
 		}
@@ -383,7 +405,7 @@ func (s *Server) callTool(p *Principal, ms *mcpSession, name string, args json.R
 		}
 		out := []map[string]any{}
 		for _, it := range items {
-			m := map[string]any{"id": it.ID, "url": s.artifactURL(it.ID), "title": it.Title, "version": it.Head,
+			m := map[string]any{"id": it.ID, "url": s.artifactURL(it.ID), "kind": it.Kind, "title": it.Title, "version": it.Head,
 				"updated_at": it.UpdatedAt, "owner": it.OwnerEmail}
 			if it.Description != "" {
 				m["description"] = it.Description
@@ -546,7 +568,11 @@ func (s *Server) apiTool(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(res.Content) > 1 && tool == "read" {
-			out["html"] = res.Content[1]["text"]
+			key := "html"
+			if r, ok := out["result"].(map[string]any); ok && r["kind"] == kindMarkdown {
+				key = "markdown"
+			}
+			out[key] = res.Content[1]["text"]
 		}
 	}
 	writeJSON(w, code, out)

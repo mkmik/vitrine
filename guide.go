@@ -7,6 +7,7 @@ import (
 
 func guideShort(cfg *Config) string {
 	return `Quick rules for vitrine artifacts (call guide for details):
+- Documents (specs, plans, notes, reports): pass markdown instead of html; vitrine renders it (GFM, footnotes, mermaid). Everything below is for html pages.
 - One self-contained HTML file. Inline your CSS/JS; libraries only from: ` + strings.Join(cfg.CDNs, " ") + `. No other network (no fetch to APIs), no cookies, no localStorage for anything shared.
 - Iterate with edit (exact find-and-replace) or rewrite, passing base_version = the head you last saw. Open views reload by themselves.
 - Optional runtime, same API as Claude artifacts: const db = await claude.use("db") (also "room", "sample", "user"); each resolves null when unavailable, so render without it first. Declare what you use with create's capabilities or declare.`
@@ -21,13 +22,14 @@ func guideText(topic string, cfg *Config) string {
 		"sample":   guideSample,
 		"user":     guideUser,
 		"patterns": guidePatterns,
+		"markdown": guideMarkdown,
 	}
 	if topic == "" {
 		topic = "overview"
 	}
 	if topic == "all" {
 		var b strings.Builder
-		for _, k := range []string{"overview", "page", "db", "room", "sample", "user", "patterns"} {
+		for _, k := range []string{"overview", "markdown", "page", "db", "room", "sample", "user", "patterns"} {
 			b.WriteString(sections[k])
 			b.WriteString("\n\n")
 		}
@@ -36,22 +38,24 @@ func guideText(topic string, cfg *Config) string {
 	if t, ok := sections[topic]; ok {
 		return t
 	}
-	return "unknown topic; use overview, page, db, room, sample, user, patterns or all"
+	return "unknown topic; use overview, markdown, page, db, room, sample, user, patterns or all"
 }
 
 const guideOverview = `# vitrine artifacts — overview
 
-An artifact is ONE self-contained HTML file with a stable id and link (https://<host>/a/<id>) and a linear version history.
+An artifact has a stable id and link (https://<host>/a/<id>), a linear version history, and one of two kinds, fixed at creation:
+- html: ONE self-contained HTML page (explainers, diagrams, prototypes, interactive apps).
+- markdown: a document (specs, PRDs, plans, notes, reports) that vitrine renders with its own viewer. See topic markdown.
 
 Tools:
-- create(title, html, description?, capabilities?) -> id, url, version 1. Give the user the url.
-- read(id or url, version?) -> current HTML + head version. Always read before editing a page you did not just write.
+- create(title, html | markdown, description?, capabilities?) -> id, url, kind, version 1. Give the user the url.
+- read(id or url, version?) -> kind, current content (HTML or markdown text) + head version. Always read before editing an artifact you did not just write.
 - edit(id, base_version, edits[{old_text,new_text}]) -> each old_text must match exactly once; all-or-nothing.
-- rewrite(id, base_version, html) -> whole new page.
+- rewrite(id, base_version, html | markdown) -> whole new content, same kind as before.
 - If base_version is not the head, the write is refused with the current head: read again, re-apply, retry.
 - list / search / history / restore / share / declare / db_get / db_query / db_write / delete.
 
-Viewing: people open the link in a shell that runs the page in a sandboxed iframe and reloads it when a new version lands (or shows a "new version" badge if they turned auto-refresh off). /a/<id>/raw is the bare page (no runtime: every claude.use() resolves null there).
+Viewing: people open the link in a shell that runs the page in a sandboxed iframe and reloads it when a new version lands (or shows a "new version" badge if they turned auto-refresh off). /a/<id>/raw is the bare page (no runtime: every claude.use() resolves null there). /a/<id>/source is the stored text (add ?download=1 to save it).
 
 Sharing levels: view (sees the head or a pinned version), interact (also writes shared storage), edit (changes the HTML, sees history), owner. Grants go to a person (email), all signed-in users, or the public (view/interact only). New artifacts are private.
 
@@ -141,3 +145,13 @@ Live cursors: room.presence({x, y}) on pointermove; room.onPeers(({peers}) => dr
 Claim a slot (first come): acquire a lease on the slot doc, get() it, set your claim only if it has no owner, let the lease lapse.
 
 Never: localStorage for shared state, polling loops, writing from snapshot callbacks, hardcoding seed data in the page (seed with db_write after create).`
+
+const guideMarkdown = `# markdown documents
+
+create(title?, markdown) makes a document. vitrine stores the markdown text as-is and renders it with a fixed viewer, so you write content, never layout. Title defaults to the first "# " heading.
+
+Supported (GitHub-flavored): headings (each gets an anchor id; 3+ h2/h3 get a contents sidebar on wide screens), **bold**, *italic*, ~~strike~~, links (auto-linked URLs too), images (https: or data:), > quotes, lists, - [ ] task lists, tables, footnotes[^1], definition lists, fenced code with a language (highlighted), and fenced mermaid blocks (rendered as diagrams).
+Raw HTML is allowed for formatting (<details>, <kbd>, <sub>, <br>, <mark>) but scripts, event handlers, forms and iframes do not run: a document has no runtime and no capabilities. Need interactivity? Make an html artifact instead.
+
+Editing: edit's old_text/new_text work on the markdown text, so small changes are cheap; rewrite replaces the whole document. Readers' open views reload in place and keep their scroll position.
+Links between artifacts: use their full https URL.`

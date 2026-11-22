@@ -24,7 +24,7 @@ func cmdImport(args []string) {
 	title := fs.String("title", "", "title (single file only)")
 	fs.Parse(args)
 	if *owner == "" || fs.NArg() == 0 {
-		log.Fatal("usage: vitrine import -owner EMAIL file.html...")
+		log.Fatal("usage: vitrine import -owner EMAIL file.html|file.md...")
 	}
 	cfg := loadConfig()
 	st, err := openStore(cfg.DBPath)
@@ -43,19 +43,29 @@ func cmdImport(args []string) {
 			log.Fatal(err)
 		}
 		t := *title
-		if t == "" {
+		if t == "" && !strings.HasSuffix(strings.ToLower(f), ".md") {
 			if m := titleRE.FindSubmatch(b); m != nil {
 				t = strings.TrimSpace(string(m[1]))
 			}
 		}
-		if t == "" {
+		if t == "" && !strings.HasSuffix(strings.ToLower(f), ".md") {
 			d := filepath.Base(filepath.Dir(f))
 			if i := strings.LastIndex(d, "-"); i > 0 {
 				d = d[:i]
 			}
 			t = strings.ReplaceAll(d, "_", " ")
 		}
-		a, err := st.createArtifact(u.ID, t, "imported", string(b), nil, "import")
+		kind, desc := kindHTML, "imported"
+		if ext := strings.ToLower(filepath.Ext(f)); ext == ".md" || ext == ".markdown" {
+			kind, desc = kindMarkdown, "imported"
+			if t == "" {
+				t = mdTitle(string(b))
+			}
+		}
+		if t == "" {
+			t = strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))
+		}
+		a, err := st.createArtifact(u.ID, kind, t, desc, string(b), nil, "import")
 		if err != nil {
 			log.Fatal(err)
 		}

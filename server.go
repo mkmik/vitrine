@@ -87,6 +87,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /a/{id}/v/{n}", s.handleShell)
 	mux.HandleFunc("GET /a/{id}/raw", s.handleRaw)
 	mux.HandleFunc("GET /a/{id}/raw/v/{n}", s.handleRaw)
+	mux.HandleFunc("GET /a/{id}/source", s.handleSource)
+	mux.HandleFunc("GET /a/{id}/source/v/{n}", s.handleSource)
 	mux.HandleFunc("GET /c/{id}/{n}", s.handleFrame)
 
 	// browser auth

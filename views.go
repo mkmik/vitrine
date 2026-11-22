@@ -179,14 +179,24 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "shell.html", s.bootFor(r, map[string]any{
 		"title": a.Title, "artifact": map[string]any{
 			"id": a.ID, "title": a.Title, "description": a.Description, "head": a.Head, "shown": shown, "follow": follow,
-			"pinned": acc.Pinned, "level": levelName(acc.Level), "caps": a.Caps().Names, "url": s.artifactURL(a.ID),
+			"pinned": acc.Pinned, "level": levelName(acc.Level), "caps": a.Caps().Names, "url": s.artifactURL(a.ID), "kind": a.Kind,
 			"updated_at": a.UpdatedAt,
 		},
 	}))
 }
 
-func (s *Server) serveContent(w http.ResponseWriter, html, mode, ancestors string) {
+func (s *Server) serveContent(w http.ResponseWriter, a *Artifact, html, mode, ancestors string) {
 	h := w.Header()
+	if a.Kind == kindMarkdown {
+		nonce := randToken("")[:22]
+		h.Set("Content-Type", "text/html; charset=utf-8")
+		h.Set("Content-Security-Policy", s.markdownCSP(nonce, ancestors))
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cache-Control", "private, no-store")
+		w.Write([]byte(markdownPage(a.Title, html, nonce)))
+		return
+	}
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Security-Policy", s.contentCSP(ancestors))
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -213,7 +223,7 @@ func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.serveContent(w, html, "frame", "'self'")
+	s.serveContent(w, a, html, "frame", "'self'")
 }
 
 func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
@@ -238,7 +248,59 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r)
 		return
 	}
-	s.serveContent(w, html, "raw", "*")
+	s.serveContent(w, a, html, "raw", "*")
+}
+
+// handleSource returns a version's stored text as-is: the markdown of a
+// document or the HTML source of a page. ?download=1 saves it as a file.
+func (s *Server) handleSource(w http.ResponseWriter, r *http.Request) {
+	a, err := s.st.artifact(r.PathValue("id"))
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	u := s.userOf(r)
+	acc := s.st.accessFor(a, u)
+	if acc.Level == lvNone && u == nil {
+		http.Redirect(w, r, s.loginURL(r.URL.RequestURI()), http.StatusFound)
+		return
+	}
+	shown, _, ok := s.resolveView(a, acc, pathInt(r, "n"))
+	if !ok {
+		s.notFound(w, r)
+		return
+	}
+	text, err := s.st.versionHTML(a.ID, shown)
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	ext := ".html"
+	if a.Kind == kindMarkdown {
+		ext = ".md"
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	h.Set("Cache-Control", "private, no-store")
+	if r.URL.Query().Get("download") != "" {
+		h.Set("Content-Disposition", `attachment; filename="`+fileSlug(a.Title)+ext+`"`)
+	}
+	w.Write([]byte(text))
+}
+
+var slugRE = regexp.MustCompile(`[^a-z0-9]+`)
+
+func fileSlug(t string) string {
+	s := strings.Trim(slugRE.ReplaceAllString(strings.ToLower(t), "-"), "-")
+	if len(s) > 60 {
+		s = strings.TrimRight(s[:60], "-")
+	}
+	if s == "" {
+		s = "artifact"
+	}
+	return s
 }
 
 // ---- UI API ----

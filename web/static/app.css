@@ -78,6 +78,8 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .card .snip { font-size: 13px; color: var(--muted); }
 .card mark { background: #ffe58f; color: #000; border-radius: 2px; }
 .card .meta { margin-top: auto; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.card .meta .tag.kind { margin-left: auto; margin-right: -2px; }
+.card .meta .tag.kind + .tag { margin-left: 0; }
 .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--tag); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
 .tag.pub { background: var(--pub); color: var(--pub-fg); }
 .empty { text-align: center; padding: 60px 16px; grid-column: 1 / -1; }

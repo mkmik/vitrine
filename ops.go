@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-var refRE = regexp.MustCompile(`(?:/(?:a|c)/)?([a-z2-7]{10})(?:/(?:raw/)?v/(\d+)|/raw|/\d+)?/?(?:[?#].*)?$`)
+var refRE = regexp.MustCompile(`(?:/(?:a|c)/)?([a-z2-7]{10})(?:/(?:raw/|source/)?v/(\d+)|/raw|/source|/\d+)?/?(?:[?#].*)?$`)
 
 // parseRef accepts an artifact id or any of its URLs and returns the id and an optional version.
 func parseRef(ref string) (string, int) {
@@ -34,27 +34,48 @@ func (e *opError) Error() string { return e.Msg }
 
 func oerr(code, f string, a ...any) *opError { return &opError{Code: code, Msg: fmt.Sprintf(f, a...)} }
 
-func (s *Server) checkHTML(html string) error {
-	if strings.TrimSpace(html) == "" {
-		return oerr("invalid_argument", "html is empty")
+// checkContent validates one version's content; kind names the field for errors.
+func (s *Server) checkContent(kind, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return oerr("invalid_argument", "%s is empty", kind)
 	}
-	if len(html) > s.cfg.MaxVersionBytes {
-		return oerr("too_large", "html is %d bytes; the limit is %d", len(html), s.cfg.MaxVersionBytes)
+	if len(text) > s.cfg.MaxVersionBytes {
+		return oerr("too_large", "%s is %d bytes; the limit is %d", kind, len(text), s.cfg.MaxVersionBytes)
 	}
 	return nil
 }
 
-func (s *Server) opCreate(p *Principal, title, desc, html string, caps json.RawMessage) (*Artifact, []string, error) {
+// mdTitle returns the text of a document's first "# " heading, if any.
+func mdTitle(md string) string {
+	for _, ln := range strings.SplitN(md, "\n", 40) {
+		ln = strings.TrimSpace(ln)
+		if strings.HasPrefix(ln, "# ") {
+			return strings.TrimSpace(strings.TrimLeft(ln, "# "))
+		}
+	}
+	return ""
+}
+
+func (s *Server) opCreate(p *Principal, kind, title, desc, html string, caps json.RawMessage) (*Artifact, []string, error) {
+	if !validKind(kind) {
+		return nil, nil, oerr("invalid_argument", "kind must be html or markdown")
+	}
+	if kind == kindMarkdown && strings.TrimSpace(title) == "" {
+		title = mdTitle(html)
+	}
 	if !s.mayCreate(p.User) {
 		return nil, nil, oerr("not_permitted", "%s may not create artifacts on this server", p.User.Email)
 	}
 	if strings.TrimSpace(title) == "" {
 		return nil, nil, oerr("invalid_argument", "title is required")
 	}
-	if err := s.checkHTML(html); err != nil {
+	if err := s.checkContent(kind, html); err != nil {
 		return nil, nil, err
 	}
 	var warnings []string
+	if kind == kindMarkdown && len(caps) > 0 && string(caps) != "null" && string(caps) != "{}" {
+		return nil, nil, oerr("invalid_argument", "markdown artifacts have no runtime; capabilities apply to html artifacts only")
+	}
 	if len(caps) > 0 && string(caps) != "null" {
 		_, w, err := validateCaps(caps)
 		if err != nil {
@@ -64,7 +85,7 @@ func (s *Server) opCreate(p *Principal, title, desc, html string, caps json.RawM
 	} else {
 		caps = nil
 	}
-	a, err := s.st.createArtifact(p.User.ID, strings.TrimSpace(title), desc, html, caps, p.Label)
+	a, err := s.st.createArtifact(p.User.ID, kind, strings.TrimSpace(title), desc, html, caps, p.Label)
 	return a, warnings, err
 }
 
@@ -85,16 +106,21 @@ func (s *Server) loadForAgent(p *Principal, ref string, need int) (*Artifact, Ac
 }
 
 func conflictErr(a *Artifact, base int) error {
-	return &opError{Code: "conflict", Msg: fmt.Sprintf("base_version %d is not the head: the head is %d. Call read to get the current HTML, re-apply your change, and retry with base_version %d.", base, a.Head, a.Head),
+	return &opError{Code: "conflict", Msg: fmt.Sprintf("base_version %d is not the head: the head is %d. Call read to get the current content, re-apply your change, and retry with base_version %d.", base, a.Head, a.Head),
 		Data: map[string]any{"head": a.Head}}
 }
 
-func (s *Server) opRewrite(p *Principal, ref string, base int, html string, title, desc *string) (*Artifact, error) {
+// opRewrite replaces the whole content. kind is the field the caller used
+// (html or markdown); it must match the artifact's kind.
+func (s *Server) opRewrite(p *Principal, ref string, base int, kind, html string, title, desc *string) (*Artifact, error) {
 	a, _, err := s.loadForAgent(p, ref, lvEdit)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkHTML(html); err != nil {
+	if kind != a.Kind {
+		return nil, oerr("invalid_argument", "%s is a %s artifact: pass its new content as %s, not %s", a.ID, a.Kind, a.Kind, kind)
+	}
+	if err := s.checkContent(kind, html); err != nil {
 		return nil, err
 	}
 	na, err := s.st.writeVersion(a.ID, base, html, title, desc, p.Label, "")
@@ -149,7 +175,7 @@ func (s *Server) opEdit(p *Principal, ref string, base int, edits []Edit, title 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkHTML(html); err != nil {
+	if err := s.checkContent(a.Kind, html); err != nil {
 		return nil, err
 	}
 	na, err := s.st.writeVersion(a.ID, base, html, title, nil, p.Label, "")
@@ -224,6 +250,9 @@ func (s *Server) opDeclare(p *Principal, ref string, caps json.RawMessage) (*Art
 	a, _, err := s.loadForAgent(p, ref, lvEdit)
 	if err != nil {
 		return nil, nil, err
+	}
+	if a.Kind == kindMarkdown {
+		return nil, nil, oerr("invalid_argument", "%s is a markdown artifact; it has no runtime to declare capabilities for", a.ID)
 	}
 	if len(caps) == 0 || string(caps) == "null" {
 		caps = json.RawMessage(`{}`)

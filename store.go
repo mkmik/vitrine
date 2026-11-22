@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
   head INTEGER NOT NULL,
   capabilities TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'html'
 );
 CREATE INDEX IF NOT EXISTS artifacts_owner ON artifacts(owner_id, updated_at);
 CREATE TABLE IF NOT EXISTS versions (
@@ -134,7 +135,42 @@ func openStore(path string) (*Store, error) {
 	if _, err := db.Exec(sqlSchema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+// migrate brings databases created by older builds up to the current schema.
+func migrate(db *sql.DB) error {
+	has, err := hasColumn(db, "artifacts", "kind")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE artifacts ADD COLUMN kind TEXT NOT NULL DEFAULT 'html'`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hasColumn(db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return false, err
+		}
+		if n == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func now() int64 { return time.Now().Unix() }
@@ -357,6 +393,7 @@ type Artifact struct {
 	OwnerID      string          `json:"owner_id"`
 	Title        string          `json:"title"`
 	Description  string          `json:"description"`
+	Kind         string          `json:"kind"`
 	Head         int             `json:"head"`
 	Capabilities json.RawMessage `json:"capabilities"`
 	CreatedAt    int64           `json:"created_at"`
@@ -379,12 +416,12 @@ func (a *Artifact) Caps() *Caps {
 	return a.caps
 }
 
-const artifactCols = `id, owner_id, title, description, head, capabilities, created_at, updated_at`
+const artifactCols = `id, owner_id, title, description, head, capabilities, created_at, updated_at, kind`
 
 func scanArtifact(sc interface{ Scan(...any) error }) (*Artifact, error) {
 	a := &Artifact{}
 	var caps string
-	if err := sc.Scan(&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Head, &caps, &a.CreatedAt, &a.UpdatedAt); err != nil {
+	if err := sc.Scan(&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Head, &caps, &a.CreatedAt, &a.UpdatedAt, &a.Kind); err != nil {
 		return nil, err
 	}
 	a.Capabilities = json.RawMessage(caps)
@@ -419,18 +456,21 @@ func (s *Store) indexFTS(tx *sql.Tx, a *Artifact, html string) error {
 	return err
 }
 
-func (s *Store) createArtifact(ownerID, title, desc, html string, caps json.RawMessage, author string) (*Artifact, error) {
+func (s *Store) createArtifact(ownerID, kind, title, desc, html string, caps json.RawMessage, author string) (*Artifact, error) {
 	if len(caps) == 0 {
 		caps = json.RawMessage(`{}`)
 	}
-	a := &Artifact{ID: randID(7)[:10], OwnerID: ownerID, Title: title, Description: desc, Head: 1, Capabilities: caps, CreatedAt: now(), UpdatedAt: now()}
+	if kind == "" {
+		kind = kindHTML
+	}
+	a := &Artifact{ID: randID(7)[:10], OwnerID: ownerID, Kind: kind, Title: title, Description: desc, Head: 1, Capabilities: caps, CreatedAt: now(), UpdatedAt: now()}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO artifacts(`+artifactCols+`) VALUES(?,?,?,?,?,?,?,?)`,
-		a.ID, a.OwnerID, a.Title, a.Description, a.Head, string(caps), a.CreatedAt, a.UpdatedAt); err != nil {
+	if _, err := tx.Exec(`INSERT INTO artifacts(`+artifactCols+`) VALUES(?,?,?,?,?,?,?,?,?)`,
+		a.ID, a.OwnerID, a.Title, a.Description, a.Head, string(caps), a.CreatedAt, a.UpdatedAt, a.Kind); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(`INSERT INTO versions(artifact_id, n, html, size, author, created_at) VALUES(?,?,?,?,?,?)`,
@@ -563,11 +603,11 @@ func (s *Store) listFor(u *User, query string, limit int, before int64) ([]ListI
 		before = 1 << 62
 	}
 	args := []any{u.ID, "email:" + u.Email}
-	q := `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, COALESCE(ou.email,''), ''
+	q := `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''), ''
 		FROM artifacts a LEFT JOIN users ou ON ou.id=a.owner_id
 		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users')))`
 	if query != "" {
-		q = `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, COALESCE(ou.email,''), snippet(artifacts_fts, 3, '«', '»', '…', 12)
+		q = `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''), snippet(artifacts_fts, 3, '«', '»', '…', 12)
 		FROM artifacts_fts f JOIN artifacts a ON a.id=f.id LEFT JOIN users ou ON ou.id=a.owner_id
 		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users'))) AND artifacts_fts MATCH ?`
 		args = append(args, ftsQuery(query))
@@ -584,7 +624,7 @@ func (s *Store) listFor(u *User, query string, limit int, before int64) ([]ListI
 		a := &Artifact{}
 		var caps string
 		li := ListItem{Artifact: a}
-		if err := rows.Scan(&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Head, &caps, &a.CreatedAt, &a.UpdatedAt, &li.OwnerEmail, &li.Snippet); err != nil {
+		if err := rows.Scan(&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Head, &caps, &a.CreatedAt, &a.UpdatedAt, &a.Kind, &li.OwnerEmail, &li.Snippet); err != nil {
 			return nil, err
 		}
 		a.Capabilities = json.RawMessage(caps)

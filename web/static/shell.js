@@ -9,7 +9,7 @@
   var LV = { none: 0, view: 1, interact: 2, edit: 3, owner: 4 };
   var state = { head: A.head, shown: A.shown, follow: A.follow, level: A.level, pinned: A.pinned, title: A.title,
     caps: A.caps || [], capabilities: {}, peer: null, connected: false, gen: 0, nonce: null, pendingHead: 0 };
-  var auto = true;
+  var auto = true, mdPos = null;
   try { auto = localStorage.getItem('vitrine.auto') !== '0'; } catch (e) { }
 
   function api(method, path, body) {
@@ -44,6 +44,8 @@
     $('autoWrap').hidden = !state.follow;
     $('auto').checked = auto;
     $('raw').href = '/a/' + A.id + '/raw' + (state.follow ? '' : '/v/' + state.shown);
+    $('src').href = '/a/' + A.id + '/source' + (state.follow ? '' : '/v/' + state.shown);
+    $('src').title = A.kind === 'markdown' ? 'Markdown source' : 'Page source';
     var b = $('badge');
     if (state.pendingHead && state.follow) { b.hidden = false; b.textContent = 'New version v' + state.pendingHead + ' — refresh'; }
     else if (!state.follow && !state.pinned && state.head > state.shown && lv >= LV.edit) { b.hidden = false; b.textContent = 'Latest is v' + state.head; }
@@ -54,7 +56,12 @@
   function load(n) {
     state.shown = n;
     state.pendingHead = 0;
-    frame.src = '/c/' + A.id + '/' + n;
+    // documents reopen where the reader was
+    var at = '';
+    if (A.kind === 'markdown' && mdPos && mdPos.y > 0) {
+      at = '?vy=' + (mdPos.y | 0) + (mdPos.a ? '&va=' + encodeURIComponent(mdPos.a) + '&vi=' + (mdPos.i | 0) + '&vo=' + (mdPos.o | 0) : '');
+    }
+    frame.src = '/c/' + A.id + '/' + n + at;
     render();
   }
   function goVersion(n, follow) {
@@ -306,6 +313,7 @@
   window.addEventListener('message', function (ev) {
     if (ev.source !== frame.contentWindow) return;
     var m = ev.data;
+    if (m && m.__vitrine_md === 1 && typeof m.y === 'number') { mdPos = m; return; }
     if (!m || m.__vitrine !== 1 || typeof m.nonce !== 'string') return;
     if (m.t === 'hello') {
       if (state.nonce === m.nonce) { if (helloInfoSent) answerHello(); return; }

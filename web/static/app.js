@@ -69,7 +69,8 @@
       el('div', { class: 'card-title', text: it.title }),
       it.description ? el('p', { class: 'muted small desc', text: it.description }) : null,
       snip,
-      el('div', { class: 'meta' }, [el('span', { class: 'muted small', text: 'v' + it.head + ' · ' + ago(it.updated_at) }), badge(it)])
+      el('div', { class: 'meta' }, [el('span', { class: 'muted small', text: 'v' + it.head + ' · ' + ago(it.updated_at) }),
+        it.kind === 'markdown' ? el('span', { class: 'tag kind', text: 'doc' }) : null, badge(it)])
     ]);
   }
   function fetchList(reset) {

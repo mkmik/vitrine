@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.21.0
+	github.com/yuin/goldmark v1.8.7
 	golang.org/x/oauth2 v0.38.0
 	modernc.org/sqlite v1.62.0
 )
