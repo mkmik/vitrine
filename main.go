@@ -21,27 +21,41 @@ import (
 const version = "0.1.0"
 
 type Config struct {
-	Addr            string
-	BaseURL         string
-	DBPath          string
-	Auth            string // exedev | oidc | dev
-	OIDCIssuer      string
-	OIDCClientID    string
-	OIDCSecret      string
-	OIDCScopes      string
-	AllowSignIn     []string // emails or @domains; empty = anyone the IdP signs in
-	Creators        []string // emails or @domains allowed to create; empty = any user
-	LLMURL          string   // Anthropic-Messages-compatible base, e.g. https://llm.int.exe.xyz
-	LLMHeader       string   // optional "Name: value" added to LLM requests
-	ModelQuick      string
-	ModelDefault    string
-	ModelComplex    string
-	CDNs            []string
-	RedirectHosts   []string // extra hosts allowed as OAuth redirect URIs
-	MaxVersionBytes int
-	MaxDocBytes     int
-	MaxDocs         int
-	SampleRPM       int
+	Addr              string
+	BaseURL           string
+	DBPath            string
+	Auth              string // exedev | oidc | proxy | dev (see auth.go)
+	OIDCIssuer        string
+	OIDCClientID      string
+	OIDCSecret        string
+	OIDCScopes        string
+	ProxyEmailHeader  string // proxy mode, plain headers
+	ProxyUserHeader   string
+	ProxyNameHeader   string
+	ProxyGroupsHeader string
+	ProxySecret       string // optional "Header: value" the proxy adds
+	ProxyLoginURL     string // optional proxy start page, {rd} = return URL
+	ProxyJWTHeader    string // proxy mode, signed JWT header instead of plain ones
+	ProxyJWKS         string
+	ProxyJWTIssuer    string
+	ProxyJWTAudience  string
+	TrustedProxies    []string // addresses/CIDRs of proxies in front, or "*"
+	GroupsClaim       string
+	AllowGroups       []string // groups allowed to sign in; empty = any
+	LogoutURL         string   // where the browser goes after sign-out
+	AllowSignIn       []string // emails or @domains; empty = anyone the IdP signs in
+	Creators          []string // emails or @domains allowed to create; empty = any user
+	LLMURL            string   // Anthropic-Messages-compatible base, e.g. https://llm.int.exe.xyz
+	LLMHeader         string   // optional "Name: value" added to LLM requests
+	ModelQuick        string
+	ModelDefault      string
+	ModelComplex      string
+	CDNs              []string
+	RedirectHosts     []string // extra hosts allowed as OAuth redirect URIs
+	MaxVersionBytes   int
+	MaxDocBytes       int
+	MaxDocs           int
+	SampleRPM         int
 }
 
 func env(k, def string) string {
@@ -71,28 +85,46 @@ func splitList(s string) []string {
 }
 
 func loadConfig() *Config {
+	addr := env("VITRINE_ADDR", "127.0.0.1:8787")
+	if os.Getenv("VITRINE_ADDR") == "" && os.Getenv("PORT") != "" { // Cloud Run, Heroku-style platforms
+		addr = "0.0.0.0:" + os.Getenv("PORT")
+	}
 	return &Config{
-		Addr:            env("VITRINE_ADDR", "127.0.0.1:8787"),
-		BaseURL:         strings.TrimRight(env("VITRINE_BASE_URL", "http://127.0.0.1:8787"), "/"),
-		DBPath:          env("VITRINE_DB", "vitrine.db"),
-		Auth:            env("VITRINE_AUTH", "exedev"),
-		OIDCIssuer:      env("VITRINE_OIDC_ISSUER", ""),
-		OIDCClientID:    env("VITRINE_OIDC_CLIENT_ID", ""),
-		OIDCSecret:      env("VITRINE_OIDC_CLIENT_SECRET", ""),
-		OIDCScopes:      env("VITRINE_OIDC_SCOPES", "openid email profile"),
-		AllowSignIn:     splitList(env("VITRINE_ALLOW_SIGNIN", "")),
-		Creators:        splitList(env("VITRINE_CREATORS", "")),
-		LLMURL:          strings.TrimRight(env("VITRINE_LLM_URL", ""), "/"),
-		LLMHeader:       env("VITRINE_LLM_HEADER", ""),
-		ModelQuick:      env("VITRINE_MODEL_QUICK", "claude-haiku-5-5"),
-		ModelDefault:    env("VITRINE_MODEL_DEFAULT", "claude-sonnet-5-5"),
-		ModelComplex:    env("VITRINE_MODEL_COMPLEX", "claude-opus-5-5"),
-		CDNs:            splitList(env("VITRINE_CDNS", "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://esm.sh https://cdn.tailwindcss.com https://fonts.googleapis.com https://fonts.gstatic.com")),
-		RedirectHosts:   splitList(env("VITRINE_OAUTH_REDIRECT_HOSTS", "")),
-		MaxVersionBytes: envInt("VITRINE_MAX_VERSION_BYTES", 16<<20),
-		MaxDocBytes:     envInt("VITRINE_MAX_DOC_BYTES", 256<<10),
-		MaxDocs:         envInt("VITRINE_MAX_DOCS", 25000),
-		SampleRPM:       envInt("VITRINE_SAMPLE_RPM", 30),
+		Addr:              addr,
+		BaseURL:           strings.TrimRight(env("VITRINE_BASE_URL", "http://127.0.0.1:8787"), "/"),
+		DBPath:            env("VITRINE_DB", "vitrine.db"),
+		Auth:              env("VITRINE_AUTH", ""),
+		OIDCIssuer:        env("VITRINE_OIDC_ISSUER", ""),
+		OIDCClientID:      env("VITRINE_OIDC_CLIENT_ID", ""),
+		OIDCSecret:        env("VITRINE_OIDC_CLIENT_SECRET", ""),
+		OIDCScopes:        env("VITRINE_OIDC_SCOPES", "openid email profile"),
+		ProxyEmailHeader:  env("VITRINE_PROXY_EMAIL_HEADER", "X-Forwarded-Email"),
+		ProxyUserHeader:   env("VITRINE_PROXY_USER_HEADER", "X-Forwarded-User"),
+		ProxyNameHeader:   env("VITRINE_PROXY_NAME_HEADER", "X-Forwarded-Preferred-Username"),
+		ProxyGroupsHeader: env("VITRINE_PROXY_GROUPS_HEADER", "X-Forwarded-Groups"),
+		ProxySecret:       env("VITRINE_PROXY_SECRET", ""),
+		ProxyLoginURL:     env("VITRINE_PROXY_LOGIN_URL", ""),
+		ProxyJWTHeader:    env("VITRINE_PROXY_JWT_HEADER", ""),
+		ProxyJWKS:         env("VITRINE_PROXY_JWT_JWKS", ""),
+		ProxyJWTIssuer:    env("VITRINE_PROXY_JWT_ISSUER", ""),
+		ProxyJWTAudience:  env("VITRINE_PROXY_JWT_AUDIENCE", ""),
+		TrustedProxies:    splitList(env("VITRINE_TRUSTED_PROXIES", "")),
+		GroupsClaim:       env("VITRINE_GROUPS_CLAIM", "groups"),
+		AllowGroups:       splitList(env("VITRINE_ALLOW_GROUPS", "")),
+		LogoutURL:         env("VITRINE_LOGOUT_URL", ""),
+		AllowSignIn:       splitList(env("VITRINE_ALLOW_SIGNIN", "")),
+		Creators:          splitList(env("VITRINE_CREATORS", "")),
+		LLMURL:            strings.TrimRight(env("VITRINE_LLM_URL", ""), "/"),
+		LLMHeader:         env("VITRINE_LLM_HEADER", ""),
+		ModelQuick:        env("VITRINE_MODEL_QUICK", "claude-haiku-5-5"),
+		ModelDefault:      env("VITRINE_MODEL_DEFAULT", "claude-sonnet-5-5"),
+		ModelComplex:      env("VITRINE_MODEL_COMPLEX", "claude-opus-5-5"),
+		CDNs:              splitList(env("VITRINE_CDNS", "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://esm.sh https://cdn.tailwindcss.com https://fonts.googleapis.com https://fonts.gstatic.com")),
+		RedirectHosts:     splitList(env("VITRINE_OAUTH_REDIRECT_HOSTS", "")),
+		MaxVersionBytes:   envInt("VITRINE_MAX_VERSION_BYTES", 16<<20),
+		MaxDocBytes:       envInt("VITRINE_MAX_DOC_BYTES", 256<<10),
+		MaxDocs:           envInt("VITRINE_MAX_DOCS", 25000),
+		SampleRPM:         envInt("VITRINE_SAMPLE_RPM", 30),
 	}
 }
 
@@ -129,7 +161,7 @@ func main() {
 	hs := &http.Server{Addr: cfg.Addr, Handler: srv.routes(), ReadHeaderTimeout: 15 * time.Second}
 	go srv.gcLoop()
 	go func() {
-		log.Printf("vitrine %s listening on %s (base %s, auth %s)", version, cfg.Addr, cfg.BaseURL, cfg.Auth)
+		log.Printf("vitrine %s listening on %s (base %s, sign-in: %s)", version, cfg.Addr, cfg.BaseURL, srv.auth.describe())
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}

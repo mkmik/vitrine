@@ -31,7 +31,7 @@
   }
   nav.appendChild(el('a', { href: '/', text: 'Artifacts' }));
   nav.appendChild(el('a', { href: '/settings', text: 'Connect agents' }));
-  nav.appendChild(el('button', { class: 'link', text: 'Sign out', title: boot.user.email, onclick: function () { api('POST', '/auth/logout').then(function () { try { indexedDB.deleteDatabase('vitrine'); } catch (e) { } location.href = '/'; }); } }));
+  nav.appendChild(el('button', { class: 'link', text: 'Sign out', title: boot.user.email, onclick: function () { api('POST', '/auth/logout').then(function (j) { try { indexedDB.deleteDatabase('vitrine'); } catch (e) { } location.href = (j && j.next) || '/'; }); } }));
 
   if (location.pathname === '/settings') return settings();
 

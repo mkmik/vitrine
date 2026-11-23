@@ -1,20 +1,17 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/coreos/go-oidc/v3/oidc"
-	"golang.org/x/oauth2"
 )
 
 //go:embed web
@@ -26,8 +23,9 @@ type Server struct {
 	hub  *Hub
 	base *url.URL
 
-	oidcVerifier *oidc.IDTokenVerifier
-	oauthCfg     *oauth2.Config
+	auth      authenticator
+	trustNets []netip.Prefix // VITRINE_TRUSTED_PROXIES
+	trustAny  bool
 
 	mu          sync.Mutex
 	mcpSessions map[string]*mcpSession
@@ -42,16 +40,11 @@ func newServer(cfg *Config, st *Store) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, st: st, base: b, mcpSessions: map[string]*mcpSession{}, limiters: map[string]*bucket{}, sampleBusy: map[string]int{}}
 	s.hub = newHub(s)
-	if cfg.Auth == "oidc" {
-		p, err := oidc.NewProvider(context.Background(), cfg.OIDCIssuer)
-		if err != nil {
-			return nil, fmt.Errorf("oidc discovery: %w", err)
-		}
-		s.oidcVerifier = p.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID})
-		s.oauthCfg = &oauth2.Config{
-			ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCSecret, Endpoint: p.Endpoint(),
-			RedirectURL: cfg.BaseURL + "/auth/callback", Scopes: strings.Fields(cfg.OIDCScopes),
-		}
+	if s.trustNets, s.trustAny, err = parsePrefixes(cfg.TrustedProxies); err != nil {
+		return nil, err
+	}
+	if s.auth, err = newAuthenticator(s); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -93,8 +86,7 @@ func (s *Server) routes() http.Handler {
 
 	// browser auth
 	mux.HandleFunc("GET /auth/login", s.handleLogin)
-	mux.HandleFunc("GET /auth/exedev", s.handleExeDevLogin)
-	mux.HandleFunc("GET /auth/callback", s.handleOIDCCallback)
+	s.auth.routes(mux)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 
 	// shell / UI API (cookie + CSRF)
@@ -259,114 +251,6 @@ func safeNext(n string) string {
 
 func (s *Server) loginURL(next string) string { return "/auth/login?next=" + url.QueryEscape(next) }
 
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	next := safeNext(r.URL.Query().Get("next"))
-	switch s.cfg.Auth {
-	case "exedev":
-		http.Redirect(w, r, "/__exe.dev/login?redirect="+url.QueryEscape("/auth/exedev?next="+url.QueryEscape(next)), http.StatusFound)
-	case "oidc":
-		state, nonce, verifier := randToken(""), randToken(""), oauth2.GenerateVerifier()
-		s.st.db.Exec(`INSERT INTO login_states(state, nonce, verifier, next, expires_at) VALUES(?,?,?,?,?)`, state, nonce, verifier, next, now()+600)
-		http.Redirect(w, r, s.oauthCfg.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)), http.StatusFound)
-	case "dev":
-		email := r.URL.Query().Get("email")
-		if email == "" {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprintf(w, `<form><input name=email placeholder=email><input type=hidden name=next value="%s"><button>sign in (dev)</button></form>`, htmlEsc(next))
-			return
-		}
-		s.finishLogin(w, r, "dev|"+strings.ToLower(email), email, "", next)
-	default:
-		http.Error(w, "unknown auth mode", 500)
-	}
-}
-
-// handleExeDevLogin trusts exe.dev's proxy identity headers. Only safe when the
-// server is reachable solely through the exe.dev HTTPS proxy.
-func (s *Server) handleExeDevLogin(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Auth != "exedev" {
-		http.NotFound(w, r)
-		return
-	}
-	next := safeNext(r.URL.Query().Get("next"))
-	uid := strings.TrimSpace(r.Header.Get("X-ExeDev-UserID"))
-	email := strings.TrimSpace(r.Header.Get("X-ExeDev-Email"))
-	if uid == "" || email == "" {
-		if r.URL.Query().Get("retry") == "" {
-			http.Redirect(w, r, "/__exe.dev/login?redirect="+url.QueryEscape("/auth/exedev?retry=1&next="+url.QueryEscape(next)), http.StatusFound)
-			return
-		}
-		http.Error(w, "exe.dev login did not complete", http.StatusUnauthorized)
-		return
-	}
-	s.finishLogin(w, r, "exedev|"+uid, email, "", next)
-}
-
-func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Auth != "oidc" {
-		http.NotFound(w, r)
-		return
-	}
-	q := r.URL.Query()
-	if e := q.Get("error"); e != "" {
-		http.Error(w, "sign-in failed: "+e+" "+q.Get("error_description"), http.StatusUnauthorized)
-		return
-	}
-	var nonce, verifier, next string
-	err := s.st.db.QueryRow(`SELECT nonce, verifier, next FROM login_states WHERE state=? AND expires_at>?`, q.Get("state"), now()).Scan(&nonce, &verifier, &next)
-	if err != nil {
-		http.Error(w, "sign-in expired, try again", http.StatusBadRequest)
-		return
-	}
-	s.st.db.Exec(`DELETE FROM login_states WHERE state=?`, q.Get("state"))
-	tok, err := s.oauthCfg.Exchange(r.Context(), q.Get("code"), oauth2.VerifierOption(verifier))
-	if err != nil {
-		log.Printf("oidc exchange: %v", err)
-		http.Error(w, "token exchange failed", http.StatusBadGateway)
-		return
-	}
-	raw, _ := tok.Extra("id_token").(string)
-	idt, err := s.oidcVerifier.Verify(r.Context(), raw)
-	if err != nil || idt.Nonce != nonce {
-		http.Error(w, "invalid id_token", http.StatusUnauthorized)
-		return
-	}
-	var cl struct {
-		Email    string `json:"email"`
-		Verified *bool  `json:"email_verified"`
-		Name     string `json:"name"`
-		UPN      string `json:"preferred_username"`
-	}
-	idt.Claims(&cl)
-	if cl.Email == "" {
-		cl.Email = cl.UPN
-	}
-	if cl.Email == "" || (cl.Verified != nil && !*cl.Verified) {
-		http.Error(w, "the identity provider gave no verified email", http.StatusUnauthorized)
-		return
-	}
-	s.finishLogin(w, r, "oidc|"+idt.Issuer+"|"+idt.Subject, cl.Email, cl.Name, next)
-}
-
-func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, sub, email, name, next string) {
-	if len(s.cfg.AllowSignIn) > 0 && !listMatch(s.cfg.AllowSignIn, email) {
-		log.Printf("login denied for %s", email)
-		http.Error(w, "this account is not allowed to sign in here", http.StatusForbidden)
-		return
-	}
-	u, err := s.st.upsertUser(sub, email, name)
-	if err != nil {
-		http.Error(w, "user: "+err.Error(), 500)
-		return
-	}
-	if err := s.setSession(w, u); err != nil {
-		http.Error(w, "session: "+err.Error(), 500)
-		return
-	}
-	log.Printf("login %s (%s)", u.Email, u.ID)
-	http.Redirect(w, r, next, http.StatusFound)
-}
-
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if s.apiSession(w, r) == nil {
 		return
@@ -375,7 +259,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		s.st.deleteSession(c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.base.Scheme == "https"})
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	next := "/"
+	if s.cfg.LogoutURL != "" { // e.g. the proxy's or IdP's sign-out page
+		next = s.cfg.LogoutURL
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "next": next})
 }
 
 // ---- bearer auth for agents ----

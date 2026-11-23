@@ -76,7 +76,7 @@ func oauthErr(w http.ResponseWriter, code int, e, desc string) {
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if !s.allow("register:"+clientIP(r), 0.1, 10) {
+	if !s.allow("register:"+s.clientIP(r), 0.1, 10) {
 		oauthErr(w, 429, "slow_down", "too many registrations")
 		return
 	}
@@ -250,7 +250,7 @@ func (s *Server) issueTokens(w http.ResponseWriter, userID, clientID, family str
 }
 
 func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
-	if !s.allow("token:"+clientIP(r), 1, 30) {
+	if !s.allow("token:"+s.clientIP(r), 1, 30) {
 		oauthErr(w, 429, "slow_down", "too many requests")
 		return
 	}
@@ -307,11 +307,4 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		s.st.db.Exec(`DELETE FROM tokens WHERE family=?`, tr.Family)
 	}
 	w.WriteHeader(200)
-}
-
-func clientIP(r *http.Request) string {
-	if x := r.Header.Get("X-Forwarded-For"); x != "" {
-		return strings.TrimSpace(strings.Split(x, ",")[0])
-	}
-	return r.RemoteAddr
 }
