@@ -17,7 +17,9 @@ type DBError struct {
 
 func (e *DBError) Error() string { return e.Code + ": " + e.Message }
 
-func dbErr(code, f string, a ...any) *DBError { return &DBError{Code: code, Message: fmt.Sprintf(f, a...)} }
+func dbErr(code, f string, a ...any) *DBError {
+	return &DBError{Code: code, Message: fmt.Sprintf(f, a...)}
+}
 
 type Doc struct {
 	Path      string         `json:"path"`
@@ -319,78 +321,102 @@ type WriteResult struct {
 
 // docWrite applies one write and returns the new version (0 for delete).
 func (s *Store) docWrite(aid string, c *Caps, v Viewer, w WriteOp, maxBytes, maxDocs int) (*WriteResult, *DBError) {
+	for attempt := 0; ; attempt++ {
+		res, err, raced := s.docWriteOnce(aid, c, v, w, maxBytes, maxDocs)
+		if !raced || attempt == 3 {
+			return res, err
+		}
+	}
+}
+
+// docWriteOnce reports raced when another writer created the document
+// between our read and our insert; the caller then tries again.
+func (s *Store) docWriteOnce(aid string, c *Caps, v Viewer, w WriteOp, maxBytes, maxDocs int) (*WriteResult, *DBError, bool) {
 	if err := checkPath(w.Path, true); err != nil {
-		return nil, dbErr("invalid_argument", "%v", err)
+		return nil, dbErr("invalid_argument", "%v", err), false
 	}
 	if !s.canWrite(c, v, w.Path) {
-		return nil, dbErr("invalid_argument", "this viewer may not write %s", w.Path)
+		return nil, dbErr("invalid_argument", "this viewer may not write %s", w.Path), false
 	}
 	if w.Op != "delete" {
 		if w.Data == nil {
-			return nil, dbErr("invalid_argument", "document body must be an object")
+			return nil, dbErr("invalid_argument", "document body must be an object"), false
 		}
 		if jsonDepth(w.Data) > 32 {
-			return nil, dbErr("invalid_argument", "document over 32 levels deep")
+			return nil, dbErr("invalid_argument", "document over 32 levels deep"), false
 		}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, dbErr("unavailable", "%v", err)
+		return nil, dbErr("unavailable", "%v", err), false
 	}
 	defer tx.Rollback()
 	var cur string
 	var ver int
-	err = tx.QueryRow(`SELECT body, version FROM docs WHERE artifact_id=? AND path=?`, aid, w.Path).Scan(&cur, &ver)
+	err = tx.QueryRow(`SELECT body, version FROM docs WHERE artifact_id=? AND path=?`+s.db.forUpdate(), aid, w.Path).Scan(&cur, &ver)
 	exists := err == nil
 	if err != nil && err != sql.ErrNoRows {
-		return nil, dbErr("unavailable", "%v", err)
+		return nil, dbErr("unavailable", "%v", err), false
 	}
 	if w.IfVersion != nil && *w.IfVersion != ver {
-		return nil, dbErr("failed_precondition", "document is at version %d, not %d", ver, *w.IfVersion)
+		return nil, dbErr("failed_precondition", "document is at version %d, not %d", ver, *w.IfVersion), false
 	}
 	switch w.Op {
 	case "delete":
 		if exists {
 			if _, err := tx.Exec(`DELETE FROM docs WHERE artifact_id=? AND path=?`, aid, w.Path); err != nil {
-				return nil, dbErr("unavailable", "%v", err)
+				return nil, dbErr("unavailable", "%v", err), false
 			}
 		}
 		if err := tx.Commit(); err != nil {
-			return nil, dbErr("unavailable", "%v", err)
+			return nil, dbErr("unavailable", "%v", err), false
 		}
-		return &WriteResult{}, nil
+		return &WriteResult{}, nil, false
 	case "update":
 		if !exists {
-			return nil, dbErr("invalid_argument", "update needs an existing document: %s", w.Path)
+			return nil, dbErr("invalid_argument", "update needs an existing document: %s", w.Path), false
 		}
 		var old map[string]any
 		json.Unmarshal([]byte(cur), &old)
 		w.Data = deepMerge(old, w.Data)
 	case "set":
 	default:
-		return nil, dbErr("invalid_argument", "unknown op %q", w.Op)
+		return nil, dbErr("invalid_argument", "unknown op %q", w.Op), false
 	}
 	body, _ := json.Marshal(w.Data)
 	if len(body) > maxBytes {
-		return nil, dbErr("invalid_argument", "document over %d bytes", maxBytes)
+		return nil, dbErr("invalid_argument", "document over %d bytes", maxBytes), false
 	}
 	if !exists {
 		var n int
 		tx.QueryRow(`SELECT COUNT(*) FROM docs WHERE artifact_id=?`, aid).Scan(&n)
 		if n >= maxDocs {
-			return nil, dbErr("quota_exceeded", "this artifact's database holds the maximum of %d documents", maxDocs)
+			return nil, dbErr("quota_exceeded", "this artifact's database holds the maximum of %d documents", maxDocs), false
 		}
 	}
 	ver++
-	if _, err := tx.Exec(`INSERT INTO docs(artifact_id, path, coll, body, version, updated_by, updated_at) VALUES(?,?,?,?,?,?,?)
-		ON CONFLICT(artifact_id, path) DO UPDATE SET body=excluded.body, version=excluded.version, updated_by=excluded.updated_by, updated_at=excluded.updated_at`,
-		aid, w.Path, collOf(w.Path), string(body), ver, v.UID, now()); err != nil {
-		return nil, dbErr("unavailable", "%v", err)
+	if exists {
+		if _, err := tx.Exec(`UPDATE docs SET body=?, version=?, updated_by=?, updated_at=? WHERE artifact_id=? AND path=?`,
+			string(body), ver, v.UID, now(), aid, w.Path); err != nil {
+			return nil, dbErr("unavailable", "%v", err), false
+		}
+	} else {
+		res, err := tx.Exec(`INSERT INTO docs(artifact_id, path, coll, body, version, updated_by, updated_at) VALUES(?,?,?,?,?,?,?)
+			ON CONFLICT(artifact_id, path) DO NOTHING`, aid, w.Path, collOf(w.Path), string(body), ver, v.UID, now())
+		if err != nil {
+			return nil, dbErr("unavailable", "%v", err), false
+		}
+		if n, _ := res.RowsAffected(); n == 0 { // someone created it first
+			if w.IfVersion != nil {
+				return nil, dbErr("failed_precondition", "document was created by someone else"), false
+			}
+			return nil, nil, true
+		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, dbErr("unavailable", "%v", err)
+		return nil, dbErr("unavailable", "%v", err), false
 	}
-	return &WriteResult{Version: ver}, nil
+	return &WriteResult{Version: ver}, nil, false
 }
 
 type AcquireResult struct {
@@ -422,7 +448,7 @@ func (s *Store) docAcquire(aid string, c *Caps, v Viewer, path, holder string, t
 	var body, lh string
 	var ver int
 	var lu int64
-	err = tx.QueryRow(`SELECT body, version, lease_holder, lease_until FROM docs WHERE artifact_id=? AND path=?`, aid, path).Scan(&body, &ver, &lh, &lu)
+	err = tx.QueryRow(`SELECT body, version, lease_holder, lease_until FROM docs WHERE artifact_id=? AND path=?`+s.db.forUpdate(), aid, path).Scan(&body, &ver, &lh, &lu)
 	exists := err == nil
 	nowMs := time.Now().UnixMilli()
 	if exists && lh != "" && lh != holder && lu > nowMs {
@@ -441,10 +467,20 @@ func (s *Store) docAcquire(aid string, c *Caps, v Viewer, path, holder string, t
 	}
 	until := nowMs + int64(ttlMs)
 	ver++
-	if _, err := tx.Exec(`INSERT INTO docs(artifact_id, path, coll, body, version, updated_by, updated_at, lease_holder, lease_until) VALUES(?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(artifact_id, path) DO UPDATE SET body=excluded.body, version=excluded.version, updated_by=excluded.updated_by, updated_at=excluded.updated_at, lease_holder=excluded.lease_holder, lease_until=excluded.lease_until`,
-		aid, path, collOf(path), string(b), ver, v.UID, now(), holder, until); err != nil {
-		return nil, dbErr("unavailable", "%v", err)
+	if exists {
+		if _, err := tx.Exec(`UPDATE docs SET body=?, version=?, updated_by=?, updated_at=?, lease_holder=?, lease_until=? WHERE artifact_id=? AND path=?`,
+			string(b), ver, v.UID, now(), holder, until, aid, path); err != nil {
+			return nil, dbErr("unavailable", "%v", err)
+		}
+	} else {
+		res, err := tx.Exec(`INSERT INTO docs(artifact_id, path, coll, body, version, updated_by, updated_at, lease_holder, lease_until) VALUES(?,?,?,?,?,?,?,?,?)
+			ON CONFLICT(artifact_id, path) DO NOTHING`, aid, path, collOf(path), string(b), ver, v.UID, now(), holder, until)
+		if err != nil {
+			return nil, dbErr("unavailable", "%v", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 { // another holder created it first and holds it
+			return &AcquireResult{Acquired: false}, nil
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, dbErr("unavailable", "%v", err)

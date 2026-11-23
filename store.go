@@ -24,7 +24,7 @@ var (
 	errConflict = errors.New("conflict")
 )
 
-type Store struct{ db *sql.DB }
+type Store struct{ db *DB }
 
 const sqlSchema = `
 CREATE TABLE IF NOT EXISTS users (
@@ -125,8 +125,29 @@ CREATE TABLE IF NOT EXISTS docs (
 CREATE INDEX IF NOT EXISTS docs_coll ON docs(artifact_id, coll);
 `
 
+// openStore opens the store named by VITRINE_DB: a postgres:// URL, or a
+// SQLite file path.
 func openStore(path string) (*Store, error) {
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)&_pragma=synchronous(NORMAL)"
+	if isPostgresURL(path) {
+		db, err := sql.Open("pgx", path)
+		if err != nil {
+			return nil, err
+		}
+		db.SetMaxOpenConns(10)
+		db.SetConnMaxIdleTime(5 * time.Minute)
+		if err := db.Ping(); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("postgres: %w", err)
+		}
+		if err := migratePostgres(db); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("postgres schema: %w", err)
+		}
+		return &Store{db: &DB{DB: db, pg: true}}, nil
+	}
+	// _txlock=immediate: a transaction takes the write lock at BEGIN, so a
+	// read-then-write transaction never races another writer.
+	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -138,8 +159,10 @@ func openStore(path string) (*Store, error) {
 	if err := migrate(db); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: &DB{DB: db}}, nil
 }
+
+func (s *Store) close() error { return s.db.Close() }
 
 // migrate brings databases created by older builds up to the current schema.
 func migrate(db *sql.DB) error {
@@ -239,7 +262,11 @@ func (s *Store) upsertUser(sub, email, name string) (*User, error) {
 	}
 	if err == sql.ErrNoRows {
 		u = &User{ID: "u_" + randID(10), Sub: sub, Email: email, Name: name}
-		_, err = s.db.Exec(`INSERT INTO users(id, sub, email, name, created_at) VALUES(?,?,?,?,?)`, u.ID, sub, email, name, now())
+		_, err = s.db.Exec(`INSERT INTO users(id, sub, email, name, created_at) VALUES(?,?,?,?,?)`, u.ID, sub, email, noNUL(name), now())
+		if isUnique(err) {
+			u = &User{}
+			err = s.db.QueryRow(`SELECT id, sub, email, name FROM users WHERE sub=?`, sub).Scan(&u.ID, &u.Sub, &u.Email, &u.Name)
+		}
 		return u, err
 	}
 	if err != nil {
@@ -439,8 +466,11 @@ func (s *Store) artifact(id string) (*Artifact, error) {
 var tagRE = regexp.MustCompile(`(?is)<script.*?</script>|<style.*?</style>|<[^>]*>`)
 var wsRE = regexp.MustCompile(`\s+`)
 
+// noNUL drops NUL characters, which Postgres text columns refuse.
+func noNUL(s string) string { return strings.ReplaceAll(s, "\x00", "") }
+
 func plainText(html string) string {
-	t := tagRE.ReplaceAllString(html, " ")
+	t := tagRE.ReplaceAllString(noNUL(html), " ")
 	t = wsRE.ReplaceAllString(t, " ")
 	if len(t) > 200000 {
 		t = t[:200000]
@@ -448,11 +478,11 @@ func plainText(html string) string {
 	return t
 }
 
-func (s *Store) indexFTS(tx *sql.Tx, a *Artifact, html string) error {
+func (s *Store) indexFTS(tx *Tx, a *Artifact, html string) error {
 	if _, err := tx.Exec(`DELETE FROM artifacts_fts WHERE id=?`, a.ID); err != nil {
 		return err
 	}
-	_, err := tx.Exec(`INSERT INTO artifacts_fts(id, title, description, body) VALUES(?,?,?,?)`, a.ID, a.Title, a.Description, plainText(html))
+	_, err := tx.Exec(`INSERT INTO artifacts_fts(id, title, description, body) VALUES(?,?,?,?)`, a.ID, noNUL(a.Title), noNUL(a.Description), plainText(html))
 	return err
 }
 
@@ -463,7 +493,7 @@ func (s *Store) createArtifact(ownerID, kind, title, desc, html string, caps jso
 	if kind == "" {
 		kind = kindHTML
 	}
-	a := &Artifact{ID: randID(7)[:10], OwnerID: ownerID, Kind: kind, Title: title, Description: desc, Head: 1, Capabilities: caps, CreatedAt: now(), UpdatedAt: now()}
+	a := &Artifact{ID: randID(7)[:10], OwnerID: ownerID, Kind: kind, Title: noNUL(title), Description: noNUL(desc), Head: 1, Capabilities: caps, CreatedAt: now(), UpdatedAt: now()}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -490,7 +520,7 @@ func (s *Store) writeVersion(id string, base int, html string, title, desc *stri
 		return nil, err
 	}
 	defer tx.Rollback()
-	a, err := scanArtifact(tx.QueryRow(`SELECT `+artifactCols+` FROM artifacts WHERE id=?`, id))
+	a, err := scanArtifact(tx.QueryRow(`SELECT `+artifactCols+` FROM artifacts WHERE id=?`+s.db.forUpdate(), id))
 	if err != nil {
 		return nil, errNotFound
 	}
@@ -500,13 +530,17 @@ func (s *Store) writeVersion(id string, base int, html string, title, desc *stri
 	a.Head++
 	a.UpdatedAt = now()
 	if title != nil && *title != "" {
-		a.Title = *title
+		a.Title = noNUL(*title)
 	}
 	if desc != nil {
-		a.Description = *desc
+		a.Description = noNUL(*desc)
 	}
 	if _, err := tx.Exec(`INSERT INTO versions(artifact_id, n, html, size, author, note, created_at) VALUES(?,?,?,?,?,?,?)`,
 		a.ID, a.Head, gz([]byte(html)), len(html), author, note, a.UpdatedAt); err != nil {
+		if isUnique(err) {
+			a.Head--
+			return a, errConflict
+		}
 		return nil, err
 	}
 	if _, err := tx.Exec(`UPDATE artifacts SET head=?, title=?, description=?, updated_at=? WHERE id=?`, a.Head, a.Title, a.Description, a.UpdatedAt, a.ID); err != nil {
@@ -524,10 +558,10 @@ func (s *Store) setMeta(id string, title, desc *string) (*Artifact, error) {
 		return nil, err
 	}
 	if title != nil && *title != "" {
-		a.Title = *title
+		a.Title = noNUL(*title)
 	}
 	if desc != nil {
-		a.Description = *desc
+		a.Description = noNUL(*desc)
 	}
 	html, _ := s.versionHTML(id, a.Head)
 	tx, err := s.db.Begin()
@@ -606,7 +640,17 @@ func (s *Store) listFor(u *User, query string, limit int, before int64) ([]ListI
 	q := `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''), ''
 		FROM artifacts a LEFT JOIN users ou ON ou.id=a.owner_id
 		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users')))`
-	if query != "" {
+	if query != "" && s.db.pg {
+		tsq := pgTSQuery(query)
+		if tsq == "" {
+			return nil, nil
+		}
+		q = `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''),
+			ts_headline('english', f.body, tq, 'StartSel=«, StopSel=», MaxWords=14, MinWords=6, MaxFragments=1, FragmentDelimiter=…')
+		FROM artifacts_fts f JOIN artifacts a ON a.id=f.id LEFT JOIN users ou ON ou.id=a.owner_id, to_tsquery('english', ?) tq
+		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users'))) AND f.tsv @@ tq`
+		args = append([]any{tsq}, args...)
+	} else if query != "" {
 		q = `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''), snippet(artifacts_fts, 3, '«', '»', '…', 12)
 		FROM artifacts_fts f JOIN artifacts a ON a.id=f.id LEFT JOIN users ou ON ou.id=a.owner_id
 		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users'))) AND artifacts_fts MATCH ?`
@@ -631,6 +675,19 @@ func (s *Store) listFor(u *User, query string, limit int, before int64) ([]ListI
 		out = append(out, li)
 	}
 	return out, rows.Err()
+}
+
+var wordRE = regexp.MustCompile(`[\p{L}\p{N}_]+`)
+
+// pgTSQuery turns free text into a prefix-matching tsquery: every word must
+// match, each as a prefix (walr finds walrus). Only letters and digits get
+// through, so query syntax can't be injected.
+func pgTSQuery(q string) string {
+	var parts []string
+	for _, w := range wordRE.FindAllString(q, 20) {
+		parts = append(parts, w+":*")
+	}
+	return strings.Join(parts, " & ")
 }
 
 // ftsQuery turns free text into a prefix-matching FTS5 query.

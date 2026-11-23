@@ -138,6 +138,9 @@ func main() {
 		case "import":
 			cmdImport(os.Args[2:])
 			return
+		case "migrate-store":
+			cmdMigrateStore(os.Args[2:])
+			return
 		case "token":
 			cmdToken(os.Args[2:])
 			return
@@ -182,7 +185,11 @@ func cmdBackup(args []string) {
 	if *out == "" {
 		log.Fatal("backup: -o required")
 	}
-	st, err := openStore(loadConfig().DBPath)
+	path := loadConfig().DBPath
+	if isPostgresURL(path) {
+		log.Fatal("backup copies a SQLite store; for Postgres use the database's own backups (pg_dump, point-in-time recovery), or vitrine migrate-store -to file.db")
+	}
+	st, err := openStore(path)
 	if err != nil {
 		log.Fatal(err)
 	}

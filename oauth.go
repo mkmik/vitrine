@@ -261,8 +261,8 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		var clientID, userID, redirect, challenge string
 		var exp int64
 		h := hashToken(f.Get("code"))
-		err := s.st.db.QueryRow(`SELECT client_id, user_id, redirect_uri, challenge, expires_at FROM oauth_codes WHERE code_hash=?`, h).Scan(&clientID, &userID, &redirect, &challenge, &exp)
-		s.st.db.Exec(`DELETE FROM oauth_codes WHERE code_hash=?`, h)
+		// DELETE ... RETURNING: of two concurrent redemptions, exactly one gets the code
+		err := s.st.db.QueryRow(`DELETE FROM oauth_codes WHERE code_hash=? RETURNING client_id, user_id, redirect_uri, challenge, expires_at`, h).Scan(&clientID, &userID, &redirect, &challenge, &exp)
 		if err != nil || exp < now() {
 			oauthErr(w, 400, "invalid_grant", "unknown or expired code")
 			return
@@ -287,14 +287,18 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 			oauthErr(w, 400, "invalid_grant", "client mismatch")
 			return
 		}
-		if tr.Used {
+		// mark used only if unused: a second, concurrent use counts as reuse
+		var marked int64
+		if res, err := s.st.db.Exec(`UPDATE tokens SET used=1 WHERE id=? AND used=0`, tr.ID); err == nil {
+			marked, _ = res.RowsAffected()
+		}
+		if marked == 0 || tr.Used {
 			// reuse of a rotated refresh token: revoke the whole family
 			s.st.db.Exec(`DELETE FROM tokens WHERE family=?`, tr.Family)
 			log.Printf("oauth: refresh token reuse, revoked family %s", tr.Family)
 			oauthErr(w, 400, "invalid_grant", "refresh token reuse")
 			return
 		}
-		s.st.db.Exec(`UPDATE tokens SET used=1 WHERE id=?`, tr.ID)
 		s.issueTokens(w, tr.UserID, tr.ClientID, tr.Family)
 	default:
 		oauthErr(w, 400, "unsupported_grant_type", "authorization_code or refresh_token")
