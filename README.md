@@ -18,6 +18,8 @@ One Go binary, one SQLite file. Implements the "Self-hosted artifact server — 
 | `ai.go` | `sample` proxy to an Anthropic Messages gateway (exe.dev LLM integration) |
 | `mcp.go` | MCP server (streamable HTTP, JSON responses) + the same tools at `/api/v1/tools/<name>` |
 | `oauth.go` | OAuth 2.1 authorization server for MCP clients (RFC 9728/8414/7591, PKCE, rotating refresh) |
+| `db.go` | the two SQL dialects: `?` rebinding for Postgres, row locks, unique-violation checks, Postgres migrations under an advisory lock |
+| `migrate.go` | `migrate-store`: copy a whole store between SQLite and Postgres, either way |
 | `server.go` | routes, sessions, CSRF, rate limits |
 | `auth.go` | pluggable browser sign-in: exedev, oidc, proxy (headers or signed JWT), dev; trusted proxies and client addresses |
 | `views.go` | shell page, sandboxed frame/raw content with CSP, UI API |
@@ -39,7 +41,7 @@ Everything is environment variables (on an exe.dev VM: `/etc/vitrine/env`).
 ```
 VITRINE_BASE_URL=https://artifacts.example.com   # the public URL: OAuth metadata, cookies, CSP and WebSocket checks use it
 VITRINE_ADDR=0.0.0.0:8787       # default 127.0.0.1:8787; if unset and PORT is set (Cloud Run): 0.0.0.0:$PORT
-VITRINE_DB=/var/lib/vitrine/vitrine.db
+VITRINE_DB=/var/lib/vitrine/vitrine.db   # a SQLite file, or postgres://user:pass@host/db (one replica until the event bus lands)
 VITRINE_AUTH=                   # required: exedev | oidc | proxy | dev (below)
 VITRINE_ALLOW_SIGNIN=           # emails/@domains allowed to sign in; empty = anyone the sign-in method accepts
 VITRINE_ALLOW_GROUPS=           # groups allowed to sign in (oidc claim or proxy header); empty = any
@@ -99,6 +101,7 @@ deploy/install.sh          # builds, installs /usr/local/bin/vitrine, systemd un
 vitrinectl token -email you@example.com -name laptop   # personal API token
 vitrinectl import -owner you@example.com page.html doc.md...  # import HTML pages and markdown documents
 vitrinectl backup -o /var/lib/vitrine/backups/now.db
+vitrine migrate-store -from vitrine.db -to postgres://...   # or back: -from postgres://... -to copy.db (destination must be empty)
 ```
 
 Backups: `vitrine-backup.timer` writes `/var/lib/vitrine/backups/vitrine-YYYY-MM-DD.db` daily, keeps 14 days.
@@ -107,6 +110,18 @@ Elsewhere: run the binary behind any TLS proxy or ingress that passes
 WebSockets, with `VITRINE_AUTH=oidc` or `proxy`. With SQLite that is one
 replica with a persistent volume; several replicas (and Cloud Run) need the
 Postgres store from the PRD addendum.
+
+## Tests
+
+```
+go test ./...       # store tests, each on SQLite and on a real Postgres
+```
+
+Postgres comes from [embedded-postgres](https://github.com/fergusstrange/embedded-postgres),
+which downloads and runs the real server binaries (cached in `~/.cache/embedded-postgres-go`);
+set `VITRINE_TEST_PG_URL=postgres://user:pass@host:port/` to use an existing server instead.
+`go run ./cmd/pgtest serve` keeps one running for the end-to-end suites, and
+`pgtest fresh -db NAME` resets a database between them.
 
 ## Not in v1
 
