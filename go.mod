@@ -1,4 +1,4 @@
-module vitrine
+module github.com/mkmik/vitrine
 
 go 1.27.4
 

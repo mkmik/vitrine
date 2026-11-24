@@ -127,3 +127,7 @@ set `VITRINE_TEST_PG_URL=postgres://user:pass@host:port/` to use an existing ser
 
 Multi-file artifacts, comments, scoped agent tokens, compaction, sample tools/images,
 `sendToClaudeSession`, the `artifact`/`assets`/`mcp` capabilities.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
