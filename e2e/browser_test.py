@@ -1,4 +1,4 @@
-import json, urllib.request, time, sys
+import json, os, urllib.request, time, sys
 from playwright.sync_api import sync_playwright
 BASE = "http://127.0.0.1:8899"
 TOK = open("/tmp/vt/tok").read().strip()
@@ -134,15 +134,16 @@ with sync_playwright() as p:
     # raw view: no runtime
     owner.goto(BASE + "/a/" + a2["id"] + "/raw")
     check(wait_for(lambda: '"have":"false,false,false"' in owner.frame_locator("#frame").locator("#out").inner_text()), "raw view runs the page, without the runtime")
-    # --- sample ---
-    owner.goto(BASE + "/a/" + a3["id"])
-    check(wait_for(lambda: rj(owner).get("have") is True), "sample resolves")
-    owner.frame_locator("#frame").locator("#go").click()
-    check(wait_for(lambda: owner.locator("#consent").is_visible()), "consent dialog")
-    owner.locator("#consent button[value=allow]").click()
-    check(wait_for(lambda: rj(owner).get("json"), 60), "sample result: " + R(owner))
-    r = rj(owner)
-    check(r.get("text") == "pong" and r.get("tier") == "quick" and r.get("json") == "[1,2,3]", "sample text + json")
+    # --- sample (needs an LLM) ---
+    if os.environ.get("VITRINE_LLM_URL"):
+        owner.goto(BASE + "/a/" + a3["id"])
+        check(wait_for(lambda: rj(owner).get("have") is True), "sample resolves")
+        owner.frame_locator("#frame").locator("#go").click()
+        check(wait_for(lambda: owner.locator("#consent").is_visible()), "consent dialog")
+        owner.locator("#consent button[value=allow]").click()
+        check(wait_for(lambda: rj(owner).get("json"), 60), "sample result: " + R(owner))
+        r = rj(owner)
+        check(r.get("text") == "pong" and r.get("tier") == "quick" and r.get("json") == "[1,2,3]", "sample text + json")
     bad = [e for e in errors if "Content Security Policy" in e or "Refused" in e]
     check(not bad, "no CSP violations in the shell" + ("" if not bad else ": " + " | ".join(bad[:3])))
     print("console errors:", errors[:5])

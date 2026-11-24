@@ -50,8 +50,11 @@ for s in $SUITES; do
     *) start ;;
   esac
   if [ "$s" = auth_test ] && [ "$BACKEND" = postgres ]; then
-    AUTH_PG=1 "$PY" "e2e/$s.py" | grep -v '^PASS' || true
+    AUTH_PG=1 "$PY" "e2e/$s.py" > /tmp/vt/out 2>&1 || true
   else
-    "$PY" "e2e/$s.py" | grep -v '^PASS' || true
+    "$PY" "e2e/$s.py" > /tmp/vt/out 2>&1 || true
   fi
+  grep -v '^PASS' /tmp/vt/out || true
+  grep -q '^FAILS: 0$' /tmp/vt/out || failed=1
 done
+exit $failed
