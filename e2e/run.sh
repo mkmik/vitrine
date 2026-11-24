@@ -28,8 +28,13 @@ if [ "$BACKEND" = postgres ]; then
   for i in $(seq 1 120); do grep -q ready /tmp/vt/pg.log && break; sleep 0.5; done
 fi
 
-start() {
+stop() {
   pkill -f '^/tmp/vitrine-new' 2>/dev/null || true
+  while pgrep -f '^/tmp/vitrine-new' > /dev/null; do sleep 0.1; done
+}
+
+start() {
+  stop
   if [ "$BACKEND" = postgres ]; then
     DB=$(/tmp/pgtest fresh -port 5439 -db vt)
   else
@@ -38,7 +43,7 @@ start() {
   export VITRINE_AUTH=dev VITRINE_ADDR=127.0.0.1:8899 VITRINE_BASE_URL=http://127.0.0.1:8899 VITRINE_DB="$DB"
   /tmp/vitrine-new token -email marko@test -name cli -create | grep -o 'vit_[A-Za-z0-9_-]*' > /tmp/vt/tok
   /tmp/vitrine-new serve > /tmp/vt/log 2>&1 &
-  sleep 1
+  for i in $(seq 1 100); do curl -s -o /dev/null "$VITRINE_BASE_URL/" && break; sleep 0.1; done
 }
 
 failed=0
@@ -46,7 +51,7 @@ for s in $SUITES; do
   echo "== $s ($BACKEND)"
   case $s in
     oauth_test) ;;                 # continues from mcp_test's server and artifact
-    auth_test) pkill -f '^/tmp/vitrine-new' 2>/dev/null || true ;;   # starts its own servers
+    auth_test) stop ;;   # starts its own servers
     *) start ;;
   esac
   if [ "$s" = auth_test ] && [ "$BACKEND" = postgres ]; then

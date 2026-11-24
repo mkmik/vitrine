@@ -108,7 +108,7 @@ with sync_playwright() as p:
     rj = lambda pg: json.loads(R(pg) or "{}")
     check(wait_for(lambda: rj(owner).get("have") == "true,true,true"), "owner: db, user, room resolve")
     check(wait_for(lambda: rj(friend).get("have") == "true,true,true"), "friend: db, user, room resolve")
-    check(wait_for(lambda: rj(owner).get("votes") == "friend,marko" and rj(friend).get("votes") == "friend,marko"), "votes sync live across users")
+    check(wait_for(lambda: rj(owner).get("votes") == "friend,marko,x" and rj(friend).get("votes") == "friend,marko,x"), "votes sync live across users")
     check(wait_for(lambda: rj(owner).get("other") == "ok"), "owner may write someone else's vote (prefix write: owner)")
     check(wait_for(lambda: rj(friend).get("other") == "invalid_argument"), "friend may not write someone else's vote")
     check(wait_for(lambda: rj(owner).get("priv") == "secret-marko" and rj(friend).get("priv") == "secret-friend"), "private data/users subtree")
