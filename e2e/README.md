@@ -15,6 +15,6 @@ runtime, markdown documents, the page hardening and sign-in.
 | `auth_test.py` | sign-in methods (oidc against `mock_idp.py`, proxy headers / secret / JWT, dev) and the configurations that must refuse to start |
 
 Run them with `e2e/run.sh` (SQLite) or `e2e/run.sh postgres`. Only failures
-are printed; each suite ends with `FAILS: n`. `browser_test`'s vote check is
-known to be flaky (the test writes one value too many), and its `sample`
-checks need `VITRINE_LLM_URL`.
+are printed; each suite ends with `FAILS: n`, and the script exits non-zero if
+any suite failed. `browser_test`'s `sample` checks run only when
+`VITRINE_LLM_URL` is set.

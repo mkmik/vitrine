@@ -1,0 +1,42 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go test ./...
+
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@v6
+      - run: |
+          uv venv /tmp/py
+          VIRTUAL_ENV=/tmp/py uv pip install playwright cryptography pyjwt
+          /tmp/py/bin/playwright install --with-deps chromium firefox webkit
+      - run: e2e/run.sh ${{ matrix.backend }}
+        env:
+          PYTHON: /tmp/py/bin/python
