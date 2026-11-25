@@ -206,13 +206,17 @@ func cmdToken(args []string) {
 	name := fs.String("name", "cli", "token name")
 	create := fs.Bool("create", false, "create the user if missing")
 	fs.Parse(args)
+	e := strings.ToLower(strings.TrimSpace(*email))
+	if e == "" {
+		log.Fatal("token: -email required") // with -create, "" would make a user with no email
+	}
 	st, err := openStore(loadConfig().DBPath)
 	if err != nil {
 		log.Fatal(err)
 	}
-	u, err := st.userByEmail(strings.ToLower(*email))
+	u, err := st.userByEmail(e)
 	if err != nil && *create {
-		u, err = st.upsertUser("local|"+strings.ToLower(*email), strings.ToLower(*email), "")
+		u, err = st.upsertUser("local|"+e, e, "")
 	}
 	if err != nil {
 		log.Fatalf("user %s: %v", *email, err)

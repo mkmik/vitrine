@@ -87,7 +87,13 @@ func (s *Server) apiSample(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sampleBusy[key]++
 	s.mu.Unlock()
-	defer func() { s.mu.Lock(); s.sampleBusy[key]--; s.mu.Unlock() }()
+	defer func() {
+		s.mu.Lock()
+		if s.sampleBusy[key]--; s.sampleBusy[key] <= 0 {
+			delete(s.sampleBusy, key) // else every user who ever sampled keeps an entry
+		}
+		s.mu.Unlock()
+	}()
 
 	tier := req.ModelTier
 	if tier == "" || tier == "inherit" {

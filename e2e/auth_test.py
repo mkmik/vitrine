@@ -66,6 +66,7 @@ try:
     refuses({"VITRINE_AUTH": "dev", "VITRINE_ADDR": "0.0.0.0:8898"}, "loopback", "dev mode on a public address: refuses")
     refuses({"VITRINE_AUTH": "oidc"}, "VITRINE_OIDC_ISSUER", "oidc without issuer: refuses")
     refuses({"VITRINE_AUTH": "proxy"}, "VITRINE_TRUSTED_PROXIES", "proxy with plain headers and no trust: refuses")
+    refuses({"VITRINE_AUTH": "proxy", "VITRINE_TRUSTED_PROXIES": "*"}, "VITRINE_TRUSTED_PROXIES", "proxy with plain headers trusting *: refuses")
     refuses({"VITRINE_AUTH": "proxy", "VITRINE_PROXY_JWT_HEADER": "X-Jwt"}, "VITRINE_PROXY_JWT_JWKS", "proxy JWT without keys: refuses")
     refuses({"VITRINE_AUTH": "proxy", "VITRINE_TRUSTED_PROXIES": "10.0.0.0/33"}, "not an address or CIDR", "bad CIDR: refuses")
 
