@@ -279,9 +279,9 @@ func newProxyAuth(s *Server) (*proxyAuth, error) {
 		keys := oidc.NewRemoteKeySet(context.Background(), c.ProxyJWKS)
 		a.jwt = oidc.NewVerifier(c.ProxyJWTIssuer, keys, &oidc.Config{ClientID: c.ProxyJWTAudience,
 			SupportedSigningAlgs: []string{"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "EdDSA"}})
-	} else if len(c.TrustedProxies) == 0 && a.secretK == "" {
-		// plain headers from anyone would let anyone sign in as anyone
-		return nil, errors.New("VITRINE_AUTH=proxy with plain headers needs VITRINE_TRUSTED_PROXIES (the proxy's addresses) or VITRINE_PROXY_SECRET")
+	} else if a.secretK == "" && (len(s.trustNets) == 0 || s.trustAny) {
+		// plain headers from anyone would let anyone sign in as anyone; "*" trusts anyone
+		return nil, errors.New("VITRINE_AUTH=proxy with plain headers needs VITRINE_TRUSTED_PROXIES (the proxy's addresses, not *) or VITRINE_PROXY_SECRET")
 	}
 	return a, nil
 }

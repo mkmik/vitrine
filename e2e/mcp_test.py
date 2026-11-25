@@ -35,6 +35,10 @@ check(st == 401 and "resource_metadata" in h.get("Www-Authenticate", h.get("WWW-
 st, h, res = rpc("tools/list")
 names = [t["name"] for t in res["result"]["tools"]]
 check(len(names) == 15, "tools/list: " + ",".join(names))
+real, sid = sid, "made-up"
+st, h, body = rpc("tools/list")
+sid = real
+check(st == 404, "unknown Mcp-Session-Id: 404 so the client initializes again")
 
 html = "<!doctype html><html><head><title>t</title></head><body><h1>Hello kangaroo</h1><p id=x>one</p></body></html>"
 err, v, content = tool("create", title="Test one", html=html, description="a test page")

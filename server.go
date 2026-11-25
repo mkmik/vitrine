@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 //go:embed web
@@ -120,8 +121,16 @@ func (s *Server) routes() http.Handler {
 		http.Error(w, "this server does not offer a server-to-client stream", http.StatusMethodNotAllowed)
 	})
 	mux.HandleFunc("DELETE /mcp", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := s.bearer(r)
+		if !ok {
+			s.unauthorized(w)
+			return
+		}
+		sid := r.Header.Get("Mcp-Session-Id")
 		s.mu.Lock()
-		delete(s.mcpSessions, r.Header.Get("Mcp-Session-Id"))
+		if ms := s.mcpSessions[sid]; ms != nil && ms.userID == p.User.ID {
+			delete(s.mcpSessions, sid)
+		}
 		s.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -242,8 +251,12 @@ func (s *Server) mayCreate(u *User) bool {
 	return u != nil && (len(s.cfg.Creators) == 0 || listMatch(s.cfg.Creators, u.Email))
 }
 
+// safeNext keeps a post-login redirect on this site. Browsers drop tabs and
+// newlines from URLs and read "\" as "/", so "/\t/evil.com" means "//evil.com":
+// refuse those characters anywhere, not just after the first slash.
 func safeNext(n string) string {
-	if n == "" || !strings.HasPrefix(n, "/") || strings.HasPrefix(n, "//") || strings.HasPrefix(n, "/\\") {
+	if !strings.HasPrefix(n, "/") || strings.HasPrefix(n, "//") ||
+		strings.ContainsFunc(n, func(r rune) bool { return r == '\\' || unicode.IsControl(r) }) {
 		return "/"
 	}
 	return n

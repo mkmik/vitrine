@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 type mcpSession struct {
-	seen       time.Time
-	guideShown bool
-	clientName string
+	userID     string
+	seen       time.Time   // guarded by Server.mu
+	guideShown atomic.Bool // concurrent tool calls share a session
 }
 
 type rpcReq struct {
@@ -64,6 +66,12 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		reqs = []rpcReq{one}
 	}
+	hasInit := slices.ContainsFunc(reqs, func(rq rpcReq) bool { return rq.Method == "initialize" })
+	if sid != "" && !hasInit && !s.knownMCPSession(p, sid) {
+		// expired, evicted, lost in a restart, or someone else's: the spec's 404 makes the client initialize again
+		http.Error(w, "unknown Mcp-Session-Id, send initialize again", http.StatusNotFound)
+		return
+	}
 	var out []rpcResp
 	for _, rq := range reqs {
 		if rq.Method == "initialize" {
@@ -87,15 +95,44 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) mcpSession(sid string) *mcpSession {
+const mcpSessionsPerUser = 50
+
+// newMCPSession stores sid for p. Past the per-user cap it drops p's least
+// recently used session; that client gets a 404 and initializes again.
+// ponytail: scans all sessions per initialize; index by user if that ever shows in a profile.
+func (s *Server) newMCPSession(p *Principal, sid string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, oldest := 0, ""
+	for k, ms := range s.mcpSessions {
+		if ms.userID == p.User.ID {
+			if n++; oldest == "" || ms.seen.Before(s.mcpSessions[oldest].seen) {
+				oldest = k
+			}
+		}
+	}
+	if n >= mcpSessionsPerUser {
+		delete(s.mcpSessions, oldest)
+	}
+	s.mcpSessions[sid] = &mcpSession{userID: p.User.ID, seen: time.Now()}
+}
+
+func (s *Server) knownMCPSession(p *Principal, sid string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ms := s.mcpSessions[sid]
+	return ms != nil && ms.userID == p.User.ID
+}
+
+// mcpSession returns p's session for sid. Only initialize stores sessions, so
+// an unknown id, or one that belongs to another user, gets a throwaway: made-up
+// ids can't grow the map or touch someone else's session.
+func (s *Server) mcpSession(p *Principal, sid string) *mcpSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ms, ok := s.mcpSessions[sid]
-	if !ok {
-		ms = &mcpSession{}
-		if sid != "" {
-			s.mcpSessions[sid] = ms
-		}
+	if !ok || ms.userID != p.User.ID {
+		return &mcpSession{userID: p.User.ID}
 	}
 	ms.seen = time.Now()
 	return ms
@@ -106,16 +143,13 @@ func (s *Server) mcpDispatch(p *Principal, sid string, rq rpcReq) (any, *rpcErr)
 	case "initialize":
 		var ip struct {
 			ProtocolVersion string `json:"protocolVersion"`
-			ClientInfo      struct {
-				Name string `json:"name"`
-			} `json:"clientInfo"`
 		}
 		json.Unmarshal(rq.Params, &ip)
 		pv := ip.ProtocolVersion
 		if pv == "" {
 			pv = "2025-06-18"
 		}
-		s.mcpSession(sid).clientName = ip.ClientInfo.Name
+		s.newMCPSession(p, sid)
 		return map[string]any{
 			"protocolVersion": pv,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
@@ -137,7 +171,7 @@ func (s *Server) mcpDispatch(p *Principal, sid string, rq rpcReq) (any, *rpcErr)
 		if !s.allow("mcp:"+p.User.ID, 10, 60) {
 			return toolError("rate_limited", "too many calls, slow down", nil), nil
 		}
-		return s.callTool(p, s.mcpSession(sid), cp.Name, cp.Arguments), nil
+		return s.callTool(p, s.mcpSession(p, sid), cp.Name, cp.Arguments), nil
 	case "resources/list":
 		return map[string]any{"resources": []any{}}, nil
 	case "resources/templates/list":
@@ -333,8 +367,7 @@ func (s *Server) callTool(p *Principal, ms *mcpSession, name string, args json.R
 			out["warnings"] = warnings
 		}
 		var extra []string
-		if ms != nil && !ms.guideShown {
-			ms.guideShown = true
+		if ms != nil && ms.guideShown.CompareAndSwap(false, true) {
 			extra = append(extra, guideShort(s.cfg))
 		}
 		return textResult(out, extra...)

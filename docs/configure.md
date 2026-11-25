@@ -10,7 +10,7 @@ VITRINE_AUTH=                   # required: exedev | oidc | proxy | dev (below)
 VITRINE_ALLOW_SIGNIN=           # emails/@domains allowed to sign in; empty = anyone the sign-in method accepts
 VITRINE_ALLOW_GROUPS=           # groups allowed to sign in (oidc claim or proxy header); empty = any
 VITRINE_CREATORS=you@example.com   # who may create artifacts; empty = anyone signed in
-VITRINE_TRUSTED_PROXIES=        # addresses/CIDRs of proxies in front, or * when the platform guarantees one (Cloud Run)
+VITRINE_TRUSTED_PROXIES=        # addresses/CIDRs of proxies in front, or * when the platform guarantees one (Cloud Run; * only covers rate limits: proxy sign-in then needs a secret or a signed JWT)
 VITRINE_LOGOUT_URL=             # where the browser goes after sign-out (the proxy's or IdP's sign-out page)
 VITRINE_LLM_URL=                # Anthropic Messages endpoint for the page `sample` capability; empty = off
 VITRINE_LLM_HEADER=             # e.g. "x-api-key: ..." for api.anthropic.com
@@ -28,7 +28,7 @@ start with a configuration that would let anyone sign in as anyone.
 |---|---|---|
 | `exedev` | an exe.dev VM | nothing: exe.dev's proxy sets `X-ExeDev-UserID`/`-Email` and strips them from clients. Only safe when the server is reachable solely through that proxy. |
 | `oidc` | any OpenID Connect provider: Google, Entra ID, Okta, Keycloak, Dex | `VITRINE_OIDC_ISSUER`, `VITRINE_OIDC_CLIENT_ID`, `VITRINE_OIDC_CLIENT_SECRET`; redirect URI `<base>/auth/callback`. Optional `VITRINE_OIDC_SCOPES`, `VITRINE_GROUPS_CLAIM` (default `groups`). |
-| `proxy` | an authenticating proxy in front: oauth2-proxy, Pomerium, Cloudflare Access, Teleport, an ingress with auth | either plain headers plus `VITRINE_TRUSTED_PROXIES` and/or `VITRINE_PROXY_SECRET`, or a signed JWT header (below) |
+| `proxy` | an authenticating proxy in front: oauth2-proxy, Pomerium, Cloudflare Access, Teleport, an ingress with auth | either plain headers plus `VITRINE_TRUSTED_PROXIES` (real addresses, not `*`) and/or `VITRINE_PROXY_SECRET`, or a signed JWT header (below) |
 | `dev` | tests | refuses any non-loopback address |
 
 `proxy` mode reads identity only at `GET /auth/proxy`: that is the one path the
