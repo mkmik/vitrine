@@ -86,9 +86,49 @@ select.quiet:hover { background-color: var(--hover); }
 .add input { flex: 1 1 200px; }
 
 .page { max-width: 980px; margin: 0 auto; padding: 18px 16px 60px; }
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.tabs { display: flex; gap: 2px; min-width: 0; }
+.tabs .tab { border: 0; background: none; border-radius: 10px; padding: 6px 14px; white-space: nowrap; }
+.tabs .tab:hover { background: var(--hover); }
+.tabs .tab.on { background: var(--tag); font-weight: 500; }
+.tools { display: flex; gap: 4px; margin-left: auto; }
+.tools .icon.on { color: var(--accent); background: var(--hover); }
+.searchrow { margin-top: 12px; }
 .searchrow input { width: 100%; padding: 10px 14px; font-size: 16px; border-radius: 10px; }
+.crumbs { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 17px; min-width: 0; }
+.crumbs a { color: var(--muted); border-radius: 6px; padding: 2px 6px; margin-left: -6px; white-space: nowrap; }
+.crumbs a:hover { color: var(--fg); background: var(--hover); }
+.crumbs b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumbs a.drop { color: var(--fg); background: var(--hover); outline: 2px dashed var(--accent); }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
+.menu button svg { flex: none; color: var(--muted); }
+.menu button.danger, .menu button.danger svg { color: var(--danger); }
+.menu button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin: 16px 0; }
+.cell { position: relative; display: flex; min-width: 0; }
+.cell > .card { flex: 1; min-width: 0; }
+.cell > .more { position: absolute; top: 8px; right: 8px; background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.12); opacity: 0; }
+.cell:hover > .more, .cell > .more:focus-visible, .cell > .more[aria-expanded="true"] { opacity: 1; }
+@media (hover: none) { .cell > .more { opacity: 1; } }
 .card { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 12px; color: var(--fg); overflow: hidden; }
+.card.drop { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.dragging .folder:not(.drop) { border-style: dashed; border-color: var(--accent); }
+/* a folder: its newest artifacts in a 2×2 grid, empty slots dashed */
+.minis { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 5%; padding: 5% 6%; }
+.minis .paper, .minis .slot { position: relative; inset: auto; min-height: 0; border-radius: 6px; }
+.minis .paper { border-bottom: 1px solid var(--line); }
+.minis .slot { border: 1.5px dashed color-mix(in srgb, var(--muted) 40%, transparent); }
+.folder .paper iframe { height: calc(100% / var(--fs, .1)); transform: scale(var(--fs, .1)); }
+.card-body.frow { flex-direction: row; align-items: center; gap: 10px; }
+.card-body.frow svg { flex: none; }
+.card-body.frow svg path { fill: #9dbbec; stroke: #7ea6e0; }
+.card-body.frow .card-title { flex: 1; min-width: 0; }
+/* list view: one row each, a small thumbnail on the left */
+.cards.rows { grid-template-columns: 1fr; gap: 8px; }
+.cards.rows .card { flex-direction: row; }
+.cards.rows .thumb { width: 140px; border-bottom: 0; border-right: 1px solid var(--line); }
+.cards.rows .card-body { justify-content: center; padding-right: 48px; }
+.cards.rows .cell > .more { top: 50%; transform: translateY(-50%); }
 .card:hover { border-color: var(--accent); }
 .card-body { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px 12px; flex: 1; }
 .card-title { font-weight: 500; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -101,6 +141,8 @@ select.quiet:hover { background-color: var(--hover); }
 .paper { position: absolute; left: 12%; right: 12%; top: 9%; bottom: -1px; background: #fff; border: 1px solid var(--line); border-bottom: 0;
   border-radius: 6px 6px 0 0; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
 .paper iframe { border: 0; width: 1024px; height: calc(100% / var(--s, .2)); transform: scale(var(--s, .2)); transform-origin: 0 0; pointer-events: none; background: #fff; }
+/* a cover over the thumbnail: WebKit won't drag a card when the press lands on a frame, even an inert one */
+.thumb::after { content: ''; position: absolute; inset: 0; }
 .paper img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
 .tag { margin-left: 0; }
 .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--tag); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }

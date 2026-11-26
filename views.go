@@ -357,8 +357,9 @@ func (s *Server) apiList(w http.ResponseWriter, r *http.Request) {
 	if ss == nil {
 		return
 	}
-	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-	items, err := s.st.listFor(ss.User, r.URL.Query().Get("q"), 60, before)
+	qs := r.URL.Query()
+	before, _ := strconv.ParseInt(qs.Get("before"), 10, 64)
+	items, err := s.st.listFor(ss.User, qs.Get("q"), 60, before, ListFilter{Owner: qs.Get("owner"), Kind: qs.Get("kind"), Folder: qs.Get("folder")})
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
@@ -587,6 +588,80 @@ func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hub.artifactDeleted(a.ID)
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// ---- folders: personal, see Store.folders ----
+
+func (s *Server) apiFolders(w http.ResponseWriter, r *http.Request) {
+	ss := s.apiSession(w, r)
+	if ss == nil {
+		return
+	}
+	fs, err := s.st.folders(ss.User)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"folders": fs})
+}
+
+// apiFolderSave creates a folder (no {fid}) or renames one.
+func (s *Server) apiFolderSave(w http.ResponseWriter, r *http.Request) {
+	ss := s.apiSession(w, r)
+	if ss == nil {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := readBody(r, &req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad json"})
+		return
+	}
+	var out any
+	var err error
+	if id := r.PathValue("fid"); id == "" {
+		out, err = s.st.createFolder(ss.User.ID, req.Name)
+	} else {
+		err = s.st.renameFolder(ss.User.ID, id, req.Name)
+		out = map[string]bool{"ok": true}
+	}
+	folderReply(w, out, err)
+}
+
+func (s *Server) apiFolderDelete(w http.ResponseWriter, r *http.Request) {
+	ss := s.apiSession(w, r)
+	if ss == nil {
+		return
+	}
+	folderReply(w, map[string]bool{"ok": true}, s.st.deleteFolder(ss.User.ID, r.PathValue("fid")))
+}
+
+// apiFile puts an artifact the caller can see into one of their folders, or back at the top ("").
+func (s *Server) apiFile(w http.ResponseWriter, r *http.Request) {
+	ss, a, _ := s.loadForAPI(w, r, lvView)
+	if a == nil {
+		return
+	}
+	var req struct {
+		Folder string `json:"folder"`
+	}
+	if err := readBody(r, &req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad json"})
+		return
+	}
+	folderReply(w, map[string]bool{"ok": true}, s.st.fileArtifact(ss.User.ID, a.ID, req.Folder))
+}
+
+func folderReply(w http.ResponseWriter, out any, err error) {
+	switch {
+	case err == errNotFound:
+		writeJSON(w, 404, map[string]string{"error": "not_found"})
+	case err != nil:
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+	default:
+		writeJSON(w, 200, out)
+	}
 }
 
 func (s *Server) apiTokens(w http.ResponseWriter, r *http.Request) {

@@ -229,6 +229,25 @@ CREATE TABLE thumbs (
   updated_at BIGINT NOT NULL
 );
 `,
+	// 3: folders
+	`
+CREATE TABLE folders (
+  id TEXT COLLATE "C" PRIMARY KEY,
+  user_id TEXT COLLATE "C" NOT NULL,
+  name TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE INDEX folders_user ON folders(user_id);
+CREATE TABLE folder_items (
+  user_id TEXT COLLATE "C" NOT NULL,
+  artifact_id TEXT COLLATE "C" NOT NULL,
+  folder_id TEXT COLLATE "C" NOT NULL,
+  added_at BIGINT NOT NULL,
+  PRIMARY KEY (user_id, artifact_id)
+);
+CREATE INDEX folder_items_folder ON folder_items(folder_id);
+CREATE INDEX folder_items_artifact ON folder_items(artifact_id);
+`,
 }
 
 const pgLockKey = 0x76697472696e65 // "vitrine"

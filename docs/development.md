@@ -26,6 +26,7 @@
 - `/a/<id>` shell (live head, or the viewer's pinned version), `/a/<id>/v/<n>` fixed version,
   `/a/<id>/raw` bare page (no runtime), `/c/<id>/<n>` frame content (sandboxed, opaque origin; `?vy=<px>` opens it scrolled down),
   `/a/<id>/thumb` uploaded thumbnail image
+- `/?folder=<id>` one of the viewer's folders; `/api/folders` lists, creates, renames, deletes them, `/api/artifacts/<id>/folder` files an artifact
 - `/mcp` MCP; `/.well-known/oauth-*`, `/oauth/*` OAuth for MCP clients
 - `/` index + search, `/settings` connect agents and personal tokens
 

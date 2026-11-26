@@ -230,7 +230,7 @@ func TestArtifactsAndVersions(t *testing.T) {
 		png := []byte("\x89PNG\r\n\x1a\n\x00rest")
 		must(t, st.setThumb(a.ID, 0, "image/png", png))
 		for _, q := range []string{"", "Renamed"} {
-			items, err := st.listFor(u, q, 50, 0)
+			items, err := st.listFor(u, q, 50, 0, ListFilter{})
 			must(t, err)
 			if len(items) == 0 {
 				t.Fatalf("list %q: %+v", q, items)
@@ -272,7 +272,7 @@ func TestSearch(t *testing.T) {
 		shared, _ := st.createArtifact(other.ID, kindHTML, "Shared walrus", "", "<p>walrus for everyone</p>", nil, "x")
 		st.setGrant(shared.ID, Grant{Audience: "users", Level: "view"})
 		titles := func(q string) []string {
-			items, err := st.listFor(u, q, 50, 0)
+			items, err := st.listFor(u, q, 50, 0, ListFilter{})
 			if err != nil {
 				t.Fatalf("search %q: %v", q, err)
 			}
@@ -298,7 +298,7 @@ func TestSearch(t *testing.T) {
 		for _, q := range []string{`" OR *`, `a:* | !b & (c`, `'; DROP TABLE artifacts; --`, `***`, `NEAR(x y)`} {
 			titles(q) // must not error
 		}
-		items, _ := st.listFor(u, "migrating", 50, 0)
+		items, _ := st.listFor(u, "migrating", 50, 0, ListFilter{})
 		if len(items) != 1 || !strings.Contains(items[0].Snippet, "«") {
 			t.Fatalf("snippet should mark the match: %+v", items)
 		}
@@ -306,6 +306,88 @@ func TestSearch(t *testing.T) {
 			t.Fatalf("list: %v", got)
 		}
 		_ = hidden
+	})
+}
+
+func TestFolders(t *testing.T) {
+	each(t, func(t *testing.T, st *Store) {
+		u, _ := st.upsertUser("dev|a", "a@example.com", "")
+		other, _ := st.upsertUser("dev|b", "b@example.com", "")
+		var mine []*Artifact
+		for i := range 6 {
+			a, _ := st.createArtifact(u.ID, []string{kindHTML, kindMarkdown}[i%2], fmt.Sprint("A", i), "", "<p>x</p>", nil, "x")
+			mine = append(mine, a)
+		}
+		shared, _ := st.createArtifact(other.ID, kindHTML, "Shared", "", "<p>x</p>", nil, "x")
+		st.setGrant(shared.ID, Grant{Audience: "email:a@example.com", Level: "view"})
+		if _, err := st.createFolder(u.ID, "  "); err == nil {
+			t.Fatal("empty folder name accepted")
+		}
+		f, err := st.createFolder(u.ID, "Work")
+		must(t, err)
+		g, _ := st.createFolder(u.ID, "archive")
+		theirs, _ := st.createFolder(other.ID, "Theirs")
+		for _, a := range append(mine[:5], shared) {
+			must(t, st.fileArtifact(u.ID, a.ID, f.ID))
+		}
+		must(t, st.fileArtifact(u.ID, mine[0].ID, g.ID)) // moves it
+		if err := st.fileArtifact(u.ID, mine[5].ID, theirs.ID); err != errNotFound {
+			t.Fatalf("filed into someone else's folder: %v", err)
+		}
+		must(t, st.fileArtifact(other.ID, shared.ID, theirs.ID)) // the owner files it too, separately
+		ids := func(f ListFilter) string {
+			items, err := st.listFor(u, "", 50, 0, f)
+			must(t, err)
+			var out []string
+			for _, it := range items {
+				out = append(out, it.Title)
+			}
+			sort.Strings(out)
+			return strings.Join(out, ",")
+		}
+		for f, want := range map[ListFilter]string{
+			{}:                                 "A0,A1,A2,A3,A4,A5,Shared",
+			{Folder: "none"}:                   "A5",
+			{Folder: f.ID}:                     "A1,A2,A3,A4,Shared",
+			{Folder: f.ID, Owner: "mine"}:      "A1,A2,A3,A4",
+			{Folder: f.ID, Owner: "shared"}:    "Shared",
+			{Folder: f.ID, Kind: kindMarkdown}: "A1,A3",
+			{Folder: theirs.ID}:                "",
+		} {
+			if got := ids(f); got != want {
+				t.Errorf("list %+v: got %s, want %s", f, got, want)
+			}
+		}
+		fs, err := st.folders(u)
+		must(t, err)
+		if len(fs) != 2 || fs[0].Name != "archive" || fs[0].Count != 1 || fs[1].Count != 5 || len(fs[1].Items) != folderPreviews {
+			t.Fatalf("folders: %+v", fs)
+		}
+		// losing access hides it from the folder
+		st.setGrant(shared.ID, Grant{Audience: "email:a@example.com", Level: "none"})
+		if fs, _ := st.folders(u); fs[1].Count != 4 {
+			t.Fatalf("unshared artifact still counted: %+v", fs[1])
+		}
+		if ofs, _ := st.folders(other); len(ofs) != 1 || ofs[0].Count != 1 {
+			t.Fatalf("other's folders: %+v", ofs)
+		}
+		must(t, st.renameFolder(u.ID, f.ID, "Work 2"))
+		if err := st.renameFolder(other.ID, f.ID, "mine now"); err != errNotFound {
+			t.Fatalf("renamed someone else's folder: %v", err)
+		}
+		if err := st.deleteFolder(other.ID, f.ID); err != errNotFound {
+			t.Fatalf("deleted someone else's folder: %v", err)
+		}
+		must(t, st.deleteArtifact(mine[1].ID))
+		must(t, st.deleteFolder(u.ID, f.ID))
+		if got := ids(ListFilter{Folder: "none"}); got != "A2,A3,A4,A5" {
+			t.Fatalf("after deleting the folder its artifacts are back on top: %s", got)
+		}
+		var n int
+		st.db.QueryRow(`SELECT COUNT(*) FROM folder_items WHERE artifact_id=?`, mine[1].ID).Scan(&n)
+		if n != 0 {
+			t.Fatal("folder rows left after deleting the artifact")
+		}
 	})
 }
 
@@ -529,6 +611,8 @@ func TestMigrateStoreRoundTrip(t *testing.T) {
 	src.docWrite(a.ID, &Caps{DB: &DBCap{}}, Viewer{UID: u.ID, Level: lvOwner}, WriteOp{Op: "set", Path: "items/a", Data: map[string]any{"n": 1}}, 1<<20, 100)
 	src.createPAT(u.ID, "cli")
 	src.setThumb(a.ID, 0, "image/png", []byte("\x89PNG\x00\xff"))
+	fo, _ := src.createFolder(u.ID, "Sea")
+	src.fileArtifact(u.ID, a.ID, fo.ID)
 
 	pgURL := pgDatabase(t)
 	pg, err := openStore(pgURL)
@@ -548,11 +632,11 @@ func TestMigrateStoreRoundTrip(t *testing.T) {
 	must(t, err)
 	for _, st := range []*Store{pg, back} {
 		pu, _ := st.userByEmail("a@example.com")
-		items, err := st.listFor(pu, "walrus", 10, 0)
+		items, err := st.listFor(pu, "walrus", 10, 0, ListFilter{})
 		if err != nil || len(items) != 1 || items[0].ID != a.ID {
 			t.Fatalf("search after copy: %v %+v", err, items)
 		}
-		if items, _ := st.listFor(pu, "narwhal", 10, 0); len(items) != 1 || items[0].Kind != kindMarkdown {
+		if items, _ := st.listFor(pu, "narwhal", 10, 0, ListFilter{}); len(items) != 1 || items[0].Kind != kindMarkdown {
 			t.Fatalf("markdown after copy: %+v", items)
 		}
 		h, _ := st.versionHTML(a.ID, 1)
@@ -561,6 +645,9 @@ func TestMigrateStoreRoundTrip(t *testing.T) {
 		}
 		if _, d, _ := st.thumbImage(a.ID); string(d) != "\x89PNG\x00\xff" {
 			t.Fatalf("thumb after copy: %q", d)
+		}
+		if fs, _ := st.folders(pu); len(fs) != 1 || fs[0].Name != "Sea" || fs[0].Count != 1 {
+			t.Fatalf("folders after copy: %+v", fs)
 		}
 		gs, _ := st.grants(a.ID)
 		if len(gs) != 1 || gs[0].Pinned != 1 {

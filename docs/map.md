@@ -56,6 +56,7 @@ flowchart LR
 | Page hardening | ✅ | blocks WebRTC, child frames, self-navigation, popups, network hints |
 | Reading position for documents | ✅ | |
 | Title menu: rename, duplicate | ✅ | duplicate copies the shown version, not its `db` data |
+| Organizing the gallery | ✅ | tabs (all, yours, shared with you), type filter, search, grid or list; personal folders, one level deep: drag a card onto a folder or use its menu |
 | Gallery thumbnails | 🟡 | the page itself, scaled down; editors can upload an image, or "use current view": a page draws its live DOM (db data, inputs, canvases) to an image through an SVG foreignObject, a document keeps its scroll position. Store tests only, no browser test yet |
 
 ## Page runtime (`claude.use(...)`)

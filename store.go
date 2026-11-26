@@ -130,6 +130,22 @@ CREATE TABLE IF NOT EXISTS thumbs (
   data BLOB NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS folders (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS folders_user ON folders(user_id);
+CREATE TABLE IF NOT EXISTS folder_items (
+  user_id TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  folder_id TEXT NOT NULL,
+  added_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, artifact_id)
+);
+CREATE INDEX IF NOT EXISTS folder_items_folder ON folder_items(folder_id);
+CREATE INDEX IF NOT EXISTS folder_items_artifact ON folder_items(artifact_id);
 `
 
 // openStore opens the store named by VITRINE_DB: a postgres:// URL, or a
@@ -619,7 +635,7 @@ func (s *Store) deleteArtifact(id string) error {
 	}
 	defer tx.Rollback()
 	for _, q := range []string{`DELETE FROM artifacts WHERE id=?`, `DELETE FROM versions WHERE artifact_id=?`, `DELETE FROM artifacts_fts WHERE id=?`,
-		`DELETE FROM grants WHERE artifact_id=?`, `DELETE FROM docs WHERE artifact_id=?`, `DELETE FROM thumbs WHERE artifact_id=?`} {
+		`DELETE FROM grants WHERE artifact_id=?`, `DELETE FROM docs WHERE artifact_id=?`, `DELETE FROM thumbs WHERE artifact_id=?`, `DELETE FROM folder_items WHERE artifact_id=?`} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
@@ -635,38 +651,72 @@ type ListItem struct {
 	Snippet    string  `json:"snippet,omitempty"`
 	ThumbY     int     `json:"thumb_y,omitempty"`
 	ThumbImg   int64   `json:"thumb_img,omitempty"` // when the uploaded image changed; 0 = none
+	Folder     string  `json:"folder,omitempty"`    // the viewer's folder holding it
 }
 
+// ListFilter narrows a listing. Zero values mean "any".
+type ListFilter struct {
+	Owner  string // "mine" or "shared"
+	Kind   string // kindHTML or kindMarkdown
+	Folder string // a folder id, or "none" for artifacts in no folder
+}
+
+// accessible is the condition for artifacts u can list: owned, or shared with them or all users. Args: user id, "email:"+email.
+const accessible = `(a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users')))`
+
 // listFor returns artifacts the user owns or has a person/users grant for, newest first.
-func (s *Store) listFor(u *User, query string, limit int, before int64) ([]ListItem, error) {
+func (s *Store) listFor(u *User, query string, limit int, before int64, f ListFilter) ([]ListItem, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	if before <= 0 {
 		before = 1 << 62
 	}
-	args := []any{u.ID, "email:" + u.Email}
 	// thumbnail: scroll offset, and when the uploaded image (if any) last changed
-	const sel = `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''),
-		COALESCE(t.y, 0), CASE WHEN t.mime <> '' THEN t.updated_at ELSE 0 END, `
-	const from = ` JOIN artifacts a ON a.id=f.id LEFT JOIN users ou ON ou.id=a.owner_id LEFT JOIN thumbs t ON t.artifact_id=a.id`
-	q := sel + `''
-		FROM artifacts a LEFT JOIN users ou ON ou.id=a.owner_id LEFT JOIN thumbs t ON t.artifact_id=a.id
-		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users')))`
-	if query != "" && s.db.pg {
+	sel := `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''),
+		COALESCE(t.y, 0), CASE WHEN t.mime <> '' THEN t.updated_at ELSE 0 END, COALESCE(fi.folder_id, ''), `
+	joins := ` LEFT JOIN users ou ON ou.id=a.owner_id LEFT JOIN thumbs t ON t.artifact_id=a.id
+		LEFT JOIN folder_items fi ON fi.artifact_id=a.id AND fi.user_id=?`
+	args := []any{u.ID}
+	var q string
+	switch {
+	case query == "":
+		q = sel + `'' FROM artifacts a` + joins + ` WHERE ` + accessible
+		args = append(args, u.ID, "email:"+u.Email)
+	case s.db.pg:
 		tsq := pgTSQuery(query)
 		if tsq == "" {
 			return nil, nil
 		}
 		q = sel + `ts_headline('english', f.body, tq, 'StartSel=«, StopSel=», MaxWords=14, MinWords=6, MaxFragments=1, FragmentDelimiter=…')
-		FROM artifacts_fts f` + from + `, to_tsquery('english', ?) tq
-		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users'))) AND f.tsv @@ tq`
-		args = append([]any{tsq}, args...)
-	} else if query != "" {
+		FROM artifacts_fts f JOIN artifacts a ON a.id=f.id` + joins + `, to_tsquery('english', ?) tq
+		WHERE ` + accessible + ` AND f.tsv @@ tq`
+		args = append(args, tsq, u.ID, "email:"+u.Email)
+	default:
 		q = sel + `snippet(artifacts_fts, 3, '«', '»', '…', 12)
-		FROM artifacts_fts f` + from + `
-		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users'))) AND artifacts_fts MATCH ?`
-		args = append(args, ftsQuery(query))
+		FROM artifacts_fts f JOIN artifacts a ON a.id=f.id` + joins + `
+		WHERE ` + accessible + ` AND artifacts_fts MATCH ?`
+		args = append(args, u.ID, "email:"+u.Email, ftsQuery(query))
+	}
+	switch f.Owner {
+	case "mine":
+		q += ` AND a.owner_id=?`
+		args = append(args, u.ID)
+	case "shared":
+		q += ` AND a.owner_id<>?`
+		args = append(args, u.ID)
+	}
+	if f.Kind != "" {
+		q += ` AND a.kind=?`
+		args = append(args, f.Kind)
+	}
+	switch f.Folder {
+	case "":
+	case "none":
+		q += ` AND fi.folder_id IS NULL`
+	default:
+		q += ` AND fi.folder_id=?`
+		args = append(args, f.Folder)
 	}
 	q += ` AND a.updated_at < ? ORDER BY a.updated_at DESC LIMIT ?`
 	args = append(args, before, limit)
@@ -680,11 +730,148 @@ func (s *Store) listFor(u *User, query string, limit int, before int64) ([]ListI
 		a := &Artifact{}
 		var caps string
 		li := ListItem{Artifact: a}
-		if err := rows.Scan(&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Head, &caps, &a.CreatedAt, &a.UpdatedAt, &a.Kind, &li.OwnerEmail, &li.ThumbY, &li.ThumbImg, &li.Snippet); err != nil {
+		if err := rows.Scan(&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Head, &caps, &a.CreatedAt, &a.UpdatedAt, &a.Kind, &li.OwnerEmail,
+			&li.ThumbY, &li.ThumbImg, &li.Folder, &li.Snippet); err != nil {
 			return nil, err
 		}
 		a.Capabilities = json.RawMessage(caps)
 		out = append(out, li)
+	}
+	return out, rows.Err()
+}
+
+// ---- folders ----
+// Folders are personal: each user files the artifacts they can see (their own
+// or shared with them) into their own flat folders, one folder per artifact.
+
+type Folder struct {
+	ID    string        `json:"id"`
+	Name  string        `json:"name"`
+	Count int           `json:"count"`
+	Items []FolderThumb `json:"items"` // the newest few, for the folder's preview
+}
+
+type FolderThumb struct {
+	ID       string `json:"id"`
+	ThumbY   int    `json:"thumb_y,omitempty"`
+	ThumbImg int64  `json:"thumb_img,omitempty"`
+}
+
+const folderPreviews = 4
+
+func folderName(name string) (string, error) {
+	name = strings.TrimSpace(noNUL(name))
+	if name == "" || len([]rune(name)) > 100 {
+		return "", errors.New("a folder name needs 1 to 100 characters")
+	}
+	return name, nil
+}
+
+func (s *Store) createFolder(userID, name string) (*Folder, error) {
+	name, err := folderName(name)
+	if err != nil {
+		return nil, err
+	}
+	f := &Folder{ID: "f_" + randID(8), Name: name, Items: []FolderThumb{}}
+	_, err = s.db.Exec(`INSERT INTO folders(id, user_id, name, created_at) VALUES(?,?,?,?)`, f.ID, userID, f.Name, now())
+	return f, err
+}
+
+func (s *Store) renameFolder(userID, id, name string) error {
+	name, err := folderName(name)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.Exec(`UPDATE folders SET name=? WHERE id=? AND user_id=?`, name, id, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errNotFound
+	}
+	return nil
+}
+
+// deleteFolder removes the folder; its artifacts go back to the top level.
+func (s *Store) deleteFolder(userID, id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM folders WHERE id=? AND user_id=?`, id, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errNotFound
+	}
+	if _, err := tx.Exec(`DELETE FROM folder_items WHERE folder_id=? AND user_id=?`, id, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// fileArtifact puts an artifact in one of the user's folders, or takes it out (folderID "").
+// The caller checks the user can see the artifact.
+func (s *Store) fileArtifact(userID, artifactID, folderID string) error {
+	if folderID == "" {
+		_, err := s.db.Exec(`DELETE FROM folder_items WHERE user_id=? AND artifact_id=?`, userID, artifactID)
+		return err
+	}
+	var x string
+	if err := s.db.QueryRow(`SELECT id FROM folders WHERE id=? AND user_id=?`, folderID, userID).Scan(&x); err != nil {
+		return errNotFound
+	}
+	_, err := s.db.Exec(`INSERT INTO folder_items(user_id, artifact_id, folder_id, added_at) VALUES(?,?,?,?)
+		ON CONFLICT(user_id, artifact_id) DO UPDATE SET folder_id=excluded.folder_id, added_at=excluded.added_at`, userID, artifactID, folderID, now())
+	return err
+}
+
+// folders lists the user's folders by name, each with how many artifacts in it
+// they can still see and the newest few of those.
+func (s *Store) folders(u *User) ([]Folder, error) {
+	rows, err := s.db.Query(`SELECT id, name FROM folders WHERE user_id=? ORDER BY LOWER(name), id`, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := []Folder{}
+	idx := map[string]int{}
+	for rows.Next() {
+		f := Folder{Items: []FolderThumb{}}
+		if err := rows.Scan(&f.ID, &f.Name); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		idx[f.ID] = len(out)
+		out = append(out, f)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(out) == 0 {
+		return out, err
+	}
+	// ponytail: reads every filed artifact the user can see; fine for hundreds, a per-folder LIMIT query if folders get huge
+	rows, err = s.db.Query(`SELECT fi.folder_id, a.id, COALESCE(t.y, 0), CASE WHEN t.mime <> '' THEN t.updated_at ELSE 0 END
+		FROM folder_items fi JOIN artifacts a ON a.id=fi.artifact_id LEFT JOIN thumbs t ON t.artifact_id=a.id
+		WHERE fi.user_id=? AND `+accessible+` ORDER BY a.updated_at DESC`, u.ID, u.ID, "email:"+u.Email)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fid string
+		var t FolderThumb
+		if err := rows.Scan(&fid, &t.ID, &t.ThumbY, &t.ThumbImg); err != nil {
+			return nil, err
+		}
+		i, ok := idx[fid]
+		if !ok {
+			continue
+		}
+		out[i].Count++
+		if len(out[i].Items) < folderPreviews {
+			out[i].Items = append(out[i].Items, t)
+		}
 	}
 	return out, rows.Err()
 }

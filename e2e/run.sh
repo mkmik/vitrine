@@ -12,7 +12,7 @@ set -e
 cd "$(dirname "$0")/.."
 BACKEND=${1:-sqlite}
 [ $# -gt 0 ] && shift
-SUITES=${*:-"mcp_test oauth_test browser_test offline_test md_test harden_test auth_test"}
+SUITES=${*:-"mcp_test oauth_test browser_test offline_test md_test folders_test harden_test auth_test"}
 PY=${PYTHON:-python3}
 mkdir -p /tmp/vt /tmp/rtcx
 go build -o /tmp/vitrine-new . && go build -o /tmp/pgtest ./cmd/pgtest
