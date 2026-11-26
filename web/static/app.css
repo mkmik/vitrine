@@ -69,8 +69,8 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .grant .who .muted { overflow: hidden; text-overflow: ellipsis; }
 .avatar { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--tag); color: var(--fg); font-size: 13px; font-weight: 600; }
 .avatar.me { background: var(--pub); color: var(--pub-fg); }
-select.quiet { border-color: transparent; background: transparent; color: var(--muted); padding-left: 6px; padding-right: 6px; max-width: 100%; }
-select.quiet:hover { background: var(--hover); }
+select.quiet { border-color: transparent; background-color: transparent; color: var(--muted); padding-left: 6px; padding-right: 26px; max-width: 100%; }
+select.quiet:hover { background-color: var(--hover); }
 .grant .who select.quiet { color: var(--fg); font-weight: 500; padding-left: 0; text-overflow: ellipsis; }
 .add { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 0; }
 .add input { flex: 1 1 200px; }
