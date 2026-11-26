@@ -460,6 +460,38 @@ func (s *Server) apiMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"artifact": na})
 }
 
+// apiDuplicate copies one version the caller can see into a new artifact they own.
+func (s *Server) apiDuplicate(w http.ResponseWriter, r *http.Request) {
+	ss, a, acc := s.loadForAPI(w, r, lvView)
+	if a == nil {
+		return
+	}
+	var req struct {
+		Version int `json:"version"`
+	}
+	readBody(r, &req)
+	n, _, ok := s.resolveView(a, acc, req.Version)
+	if !ok {
+		writeJSON(w, 404, map[string]string{"error": "not_found"})
+		return
+	}
+	html, err := s.st.versionHTML(a.ID, n)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	na, _, err := s.opCreate(&Principal{User: ss.User, Label: "user:" + ss.User.Email}, a.Kind, "Copy of "+a.Title, a.Description, html, a.Capabilities)
+	if err != nil {
+		code := 400
+		if oe, ok := err.(*opError); ok && oe.Code == "not_permitted" {
+			code = 403
+		}
+		writeJSON(w, code, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": na.ID, "url": s.artifactURL(na.ID)})
+}
+
 func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {
 	_, a, _ := s.loadForAPI(w, r, lvOwner)
 	if a == nil {

@@ -98,6 +98,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/artifacts/{id}/restore", s.apiRestore)
 	mux.HandleFunc("POST /api/artifacts/{id}/share", s.apiShare)
 	mux.HandleFunc("POST /api/artifacts/{id}/meta", s.apiMeta)
+	mux.HandleFunc("POST /api/artifacts/{id}/duplicate", s.apiDuplicate)
 	mux.HandleFunc("DELETE /api/artifacts/{id}", s.apiDelete)
 	mux.HandleFunc("GET /api/tokens", s.apiTokens)
 	mux.HandleFunc("POST /api/tokens", s.apiCreateToken)

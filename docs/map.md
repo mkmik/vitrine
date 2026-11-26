@@ -55,6 +55,7 @@ flowchart LR
 | Sandboxed frame, CSP | ✅ | opaque origin per frame |
 | Page hardening | ✅ | blocks WebRTC, child frames, self-navigation, popups, network hints |
 | Reading position for documents | ✅ | |
+| Title menu: rename, duplicate | ✅ | duplicate copies the shown version, not its `db` data |
 
 ## Page runtime (`claude.use(...)`)
 

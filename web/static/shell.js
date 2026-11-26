@@ -8,7 +8,7 @@
   var frame = $('frame');
   var LV = { none: 0, view: 1, interact: 2, edit: 3, owner: 4 };
   var state = { head: A.head, shown: A.shown, follow: A.follow, level: A.level, pinned: A.pinned, title: A.title,
-    caps: A.caps || [], capabilities: {}, peer: null, connected: false, gen: 0, nonce: null, pendingHead: 0 };
+    caps: A.caps || [], capabilities: {}, peer: null, connected: false, gen: 0, nonce: null, pendingHead: 0, updated: A.updated_at };
   var auto = true, mdPos = null;
   try { auto = localStorage.getItem('vitrine.auto') !== '0'; } catch (e) { }
 
@@ -31,9 +31,13 @@
 
   // ---------------- chrome ----------------
   function render() {
-    $('title').textContent = state.title;
+    $('titleText').textContent = state.title;
     document.title = state.title;
     var lv = LV[state.level] || 0;
+    $('renameBtn').hidden = lv < LV.edit;
+    $('dupBtn').hidden = !boot.can_create;
+    $('title').disabled = $('renameBtn').hidden && $('dupBtn').hidden;
+    $('edited').textContent = state.updated ? 'Edited ' + fmtTime(state.updated) : '';
     var label = 'v' + state.shown;
     if (state.pinned) label += ' · pinned';
     else if (state.shown !== state.head) label += ' of ' + state.head;
@@ -89,6 +93,40 @@
   $('badge').addEventListener('click', function () { if (state.pendingHead) load(state.pendingHead); else goVersion(state.head, true); });
   $('copyBtn').addEventListener('click', function () {
     if (navigator.clipboard) navigator.clipboard.writeText(A.url).then(function () { $('copyBtn').textContent = 'Copied'; setTimeout(function () { $('copyBtn').textContent = 'Copy link'; }, 1500); });
+  });
+
+  // title menu: rename, duplicate
+  var menu = $('titleMenu'), titleEdit = $('titleEdit');
+  menu.addEventListener('beforetoggle', function (e) {
+    if (e.newState !== 'open') return;
+    var r = $('title').getBoundingClientRect();
+    menu.style.top = (r.bottom + 6) + 'px'; menu.style.left = r.left + 'px';
+  });
+  // clicks inside the artifact frame never reach this document; close on focus loss instead
+  window.addEventListener('blur', function () { if (menu.matches(':popover-open')) menu.hidePopover(); });
+  $('renameBtn').addEventListener('click', function () {
+    menu.hidePopover();
+    titleEdit.value = state.title;
+    $('title').hidden = true; titleEdit.hidden = false;
+    titleEdit.focus(); titleEdit.select();
+  });
+  function endRename(save) {
+    if (titleEdit.hidden) return;
+    var v = titleEdit.value.trim(), old = state.title;
+    titleEdit.hidden = true; $('title').hidden = false;
+    if (!save || !v || v === old) return;
+    state.title = v; render();
+    api('POST', '/api/artifacts/' + A.id + '/meta', { title: v }).then(function () { state.updated = Date.now() / 1000; render(); },
+      function (e) { state.title = old; render(); alert(e.message); });
+  }
+  titleEdit.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') endRename(true); else if (e.key === 'Escape') endRename(false);
+  });
+  titleEdit.addEventListener('blur', function () { endRename(true); });
+  $('dupBtn').addEventListener('click', function () {
+    menu.hidePopover();
+    api('POST', '/api/artifacts/' + A.id + '/duplicate', { version: state.follow ? 0 : state.shown })
+      .then(function (j) { location.href = '/a/' + j.id; }, function (e) { alert(e.message); });
   });
 
   // history panel
@@ -232,6 +270,7 @@
           else if (pendingHello) answerHello();
           break;
         case 'head':
+          if (m.head > state.head) state.updated = Date.now() / 1000;
           state.title = m.title; state.caps = m.caps || state.caps; state.capabilities = m.capabilities || state.capabilities;
           onHead(m.head);
           break;

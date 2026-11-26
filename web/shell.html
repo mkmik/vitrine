@@ -11,7 +11,13 @@
 <body class="shell" data-boot="{{.Boot}}">
 <header class="bar">
   <a class="home" href="/" title="All artifacts" aria-label="All artifacts"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 5h7v6H4zM13 5h7v4h-7zM13 11h7v8h-7zM4 13h7v6H4z" fill="currentColor"/></svg></a>
-  <div class="title" id="title"></div>
+  <button class="title" id="title" popovertarget="titleMenu"><span id="titleText"></span><svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  <input class="title-edit" id="titleEdit" aria-label="Title" maxlength="200" hidden>
+  <div class="menu" id="titleMenu" popover>
+    <div class="menu-head" id="edited"></div>
+    <button id="renameBtn"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>Rename</button>
+    <button id="dupBtn"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M9 9h11v11H9zM15 9V4H4v11h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>Duplicate</button>
+  </div>
   <span class="ver" id="ver"></span>
   <button class="badge" id="badge" hidden></button>
   <span class="dot" id="conn" title="Live connection"></span>
