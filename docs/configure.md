@@ -10,6 +10,7 @@ VITRINE_AUTH=                   # required: exedev | oidc | proxy | dev (below)
 VITRINE_ALLOW_SIGNIN=           # emails/@domains allowed to sign in; empty = anyone the sign-in method accepts
 VITRINE_ALLOW_GROUPS=           # groups allowed to sign in (oidc claim or proxy header); empty = any
 VITRINE_CREATORS=you@example.com   # who may create artifacts; empty = anyone signed in
+VITRINE_ORG_NAME=               # e.g. "Example Corp": the share dialog then says "Anyone at Example Corp" for everyone who can sign in
 VITRINE_TRUSTED_PROXIES=        # addresses/CIDRs of proxies in front, or * when the platform guarantees one (Cloud Run; * only covers rate limits: proxy sign-in then needs a secret or a signed JWT)
 VITRINE_LOGOUT_URL=             # where the browser goes after sign-out (the proxy's or IdP's sign-out page)
 VITRINE_LLM_URL=                # Anthropic Messages endpoint for the page `sample` capability; empty = off

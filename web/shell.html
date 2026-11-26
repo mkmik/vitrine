@@ -35,16 +35,18 @@
 <dialog id="share">
   <form method="dialog" class="dlg">
     <div class="panel-head"><b>Share</b><button class="icon" value="close" aria-label="Close">✕</button></div>
-    <p class="muted small" id="shareUrl"></p>
-    <div class="grants" id="grants"></div>
     <div class="add">
-      <input id="who" placeholder="email, or “users”, or “public”" autocomplete="off">
-      <select id="lvl"><option value="view">can view</option><option value="interact">can interact</option><option value="edit">can edit</option></select>
-      <select id="pin"><option value="0">live</option></select>
+      <input id="who" type="email" placeholder="Add people by email" autocomplete="off">
+      <select id="lvl"><option value="view">Viewer</option><option value="interact">Interactor</option><option value="edit">Editor</option></select>
       <button class="primary" id="grantBtn" value="">Add</button>
     </div>
-    <p class="muted small">“users” is everyone who can sign in here; “public” is anyone with the link (view or interact). Interact also lets people write the page's shared data. A pinned grant shows a fixed version.</p>
+    <h4 class="sect">People with access</h4>
+    <div id="people"></div>
+    <h4 class="sect">General access</h4>
+    <div id="general"></div>
+    <p class="muted small">Viewers can't change the page's shared data; interactors can. A version other than “live” keeps showing that version.</p>
     <p class="err" id="shareErr"></p>
+    <div class="row"><button type="button" id="shareCopy">Copy link</button></div>
   </form>
 </dialog>
 <dialog id="consent">
