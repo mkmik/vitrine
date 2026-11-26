@@ -39,7 +39,7 @@ type rpcErr struct {
 
 const serverInstructions = `vitrine hosts artifacts at stable links: single-file HTML pages (explainers, diagrams, prototypes, interactive apps) and markdown documents (specs, PRDs, notes, reports), which vitrine renders itself.
 Create one with create (pass html for a page, markdown for a document) and give the user the link. To iterate, use edit (exact find-and-replace) or rewrite (whole page), always passing base_version = the version you last saw; open views reload by themselves. When the user pastes a link, call read first.
-Pages can keep shared data (db), see who else is here (room), call a model (sample) and know the viewer (user) through await claude.use(name), the same API as Claude artifacts. Call guide before writing a page that uses them.`
+Pages can keep shared data (db: a last-writer-wins document store; for counters or co-editing, one document per writer, merged on read), see who else is here (room), call a model (sample) and know the viewer (user) through await claude.use(name), the same API as Claude artifacts. Call guide before writing a page that uses them.`
 
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.bearer(r)
