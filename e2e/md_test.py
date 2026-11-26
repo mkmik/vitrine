@@ -184,7 +184,8 @@ with sync_playwright() as p:
     ph.screenshot(path="/tmp/vt/md_phone.png", full_page=False)
 
     pg.goto(BASE + "/")
-    check(wait_for(lambda: pg.locator(".card .tag.kind").count() == 1), "index shows doc tag")
+    check(wait_for(lambda: pg.locator(".card .meta", has_text="Doc · ").count() == 1), "index marks the document")
+    check(wait_for(lambda: pg.locator(".card .thumb iframe").count() >= 1), "index shows thumbnails")
     pg.goto(BASE + "/a/" + aid)
     time.sleep(2)
     pg.screenshot(path="/tmp/vt/md_shell.png")
