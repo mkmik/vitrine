@@ -35,7 +35,17 @@ pre.code { background: var(--card); border: 1px solid var(--line); border-radius
 .bar { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--card); flex: none; }
 .bar .home { display: inline-flex; align-items: center; gap: 8px; color: var(--fg); padding: 6px; border-radius: 6px; }
 .bar .home:hover { background: var(--hover); }
-.bar .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 40vw; }
+.bar .title { font-weight: 600; white-space: nowrap; min-width: 0; max-width: 40vw; border: 0; background: none; padding: 4px 6px 4px 8px; gap: 4px; }
+.bar .title span { overflow: hidden; text-overflow: ellipsis; }
+.bar .title svg { flex: none; color: var(--muted); }
+.bar .title:disabled { cursor: default; background: none; }
+.bar .title:disabled svg { display: none; }
+.bar .title-edit { font-weight: 600; width: min(320px, 45vw); padding: 3px 8px; }
+.menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 200px; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.14); }
+.menu-head { color: var(--muted); font-size: 13px; padding: 6px 10px 4px; }
+.menu button { display: flex; width: 100%; border: 0; background: none; padding: 7px 10px; gap: 10px; border-radius: 8px; }
+.menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+.menu button[hidden] { display: none; }
 .bar .ver { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .bar .spacer { flex: 1; }
 .bar nav { display: flex; gap: 16px; align-items: center; font-size: 14px; }

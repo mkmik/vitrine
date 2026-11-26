@@ -101,6 +101,21 @@ with sync_playwright() as p:
     owner.locator("#historyBtn").click()
     check(wait_for(lambda: owner.locator("#versions li").count() == 3), "history lists 3 versions")
 
+    # --- title menu: rename, duplicate ---
+    owner.locator("#title").click()
+    check(wait_for(lambda: owner.locator("#renameBtn").is_visible()), "title menu opens")
+    owner.locator("#renameBtn").click()
+    owner.locator("#titleEdit").fill("Renamed live")
+    owner.locator("#titleEdit").press("Enter")
+    check(wait_for(lambda: tool("read", id=a1["id"])["result"]["title"] == "Renamed live"), "rename saves the title")
+    check(owner.locator("#titleText").inner_text() == "Renamed live", "rename shows the new title")
+    owner.locator("#title").click()
+    owner.locator("#dupBtn").click()
+    owner.wait_for_url(lambda u: "/a/" in u and a1["id"] not in u)
+    check(True, "duplicate opens the copy")
+    check(wait_for(lambda: owner.locator("#titleText").inner_text() == "Copy of Renamed live"), "copy is titled 'Copy of ...'")
+    check(wait_for(lambda: fr(owner).locator("#h").inner_text() == "version three"), "copy has the latest content")
+
     # --- db / room / user across two users ---
     owner.goto(BASE + "/a/" + a2["id"])
     friend.goto(BASE + "/a/" + a2["id"])
