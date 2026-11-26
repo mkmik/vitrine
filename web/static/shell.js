@@ -147,7 +147,21 @@
     $('thumbDlg').showModal();
     showThumb(thumb);
   });
-  $('thumbView').addEventListener('click', function () { pick = { y: mdPos ? mdPos.y : 0 }; showThumb(pick); });
+  // a document is rendered by vitrine, so its scroll position is enough; a page may show state
+  // (db, form input, canvas) a fresh copy wouldn't have, so it draws itself as an image
+  var snapping = false;
+  $('thumbView').addEventListener('click', function () {
+    $('thumbErr').textContent = '';
+    if (A.kind === 'markdown') { pick = { y: mdPos ? mdPos.y : 0 }; showThumb(pick); return; }
+    var paper = $('thumbPrev').querySelector('.paper');
+    snapping = true; toFrame({ t: 'snap', ratio: paper ? paper.clientHeight / paper.clientWidth : 0 });
+  });
+  function gotSnap(m) {
+    if (!snapping || !$('thumbDlg').open) return;
+    snapping = false;
+    if (m.blob instanceof Blob) { pick = { file: m.blob }; showThumb(pick); return; }
+    $('thumbErr').textContent = 'Could not capture this view (' + (m.error || 'no answer') + ').';
+  }
   $('thumbUp').addEventListener('click', function () { $('thumbFile').click(); });
   $('thumbFile').addEventListener('change', function () {
     var f = this.files[0]; this.value = '';
@@ -490,6 +504,8 @@
         function (e) { if (gen === state.gen) toFrame({ t: 're', id: m.id, error: e }); });
     } else if (m.t === 'sample') {
       runSample(m.id, m.req || {}, gen);
+    } else if (m.t === 'snap') {
+      gotSnap(m);
     } else if (m.t === 'sample.abort') {
       var c = samplesInFlight.get(gen + ':' + m.id); if (c) c.abort();
     }

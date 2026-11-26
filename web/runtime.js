@@ -75,6 +75,9 @@
         } else if (m.ev === 'db.snap') { if (onDbSnap) onDbSnap(m); }
         else if (m.ev === 'room.peers' || m.ev === 'room.msg') { if (onRoomEvent) onRoomEvent(m); }
         break;
+      case 'snap':
+        snapshot(m.ratio).then(function (b) { post({ t: 'snap', blob: b }); }, function (e) { post({ t: 'snap', error: String(e && e.message || e) }); });
+        break;
       case 'sample.delta': case 'sample.done': case 'sample.err':
         var h = samples.get(m.id);
         if (h) h(m);
@@ -103,6 +106,72 @@
   if (CFG.y > 0) { // opened scrolled down: a thumbnail; again on load, after late layout
     var goY = function () { window.scrollTo(0, CFG.y); };
     document.addEventListener('DOMContentLoaded', goY); window.addEventListener('load', goY); setTimeout(goY, 800);
+  }
+
+  // ---- snapshot: the page as the viewer sees it right now, as an image ("use current view" thumbnails).
+  // The live DOM (with its db data, form values and canvases) is drawn through an SVG foreignObject.
+  // ponytail: CSS background images and web fonts from a CDN aren't inlined; they fall back.
+  function toDataURL(url) {
+    return fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
+      return new Promise(function (res) { var fr = new FileReader(); fr.onload = function () { res(fr.result); }; fr.readAsDataURL(b); });
+    });
+  }
+  // ratio: the thumbnail's height / width; a wide window takes in more of the page below to fill it
+  function snapshot(ratio) {
+    var doc = document.documentElement, clone = doc.cloneNode(true), w = innerWidth, jobs = [];
+    var h = Math.max(innerHeight, Math.round(w * (+ratio > 0 && +ratio < 4 ? +ratio : 0)));
+    var src = doc.querySelectorAll('*'), dst = clone.querySelectorAll('*'); // same elements, same order
+    for (var i = 0; i < src.length; i++) {
+      var s = src[i], d = dst[i];
+      switch (s.tagName) {
+        case 'SCRIPT': d.remove(); break;
+        case 'INPUT':
+          if (s.type === 'checkbox' || s.type === 'radio') d.toggleAttribute('checked', s.checked); else d.setAttribute('value', s.value);
+          break;
+        case 'TEXTAREA': d.textContent = s.value; break;
+        case 'OPTION': d.toggleAttribute('selected', s.selected); break;
+        case 'CANVAS':
+          try { var im = document.createElement('img'); im.src = s.toDataURL(); im.className = s.className; im.style.cssText = s.style.cssText;
+            im.width = s.clientWidth; im.height = s.clientHeight; d.replaceWith(im); } catch (e) { }
+          break;
+        case 'IMG':
+          if (s.currentSrc && s.currentSrc.indexOf('data:') !== 0) {
+            d.removeAttribute('srcset');
+            jobs.push(toDataURL(s.currentSrc).then(function (d, u) { d.setAttribute('src', u); }.bind(null, d), function () { }));
+          }
+          break;
+        case 'STYLE': case 'LINK': // rules added from script, and CDN sheets, aren't in the markup: copy them in
+          if (s.sheet) try {
+            var css = Array.prototype.map.call(s.sheet.cssRules, function (r) { return r.cssText; }).join('\n');
+            if (s.tagName === 'STYLE') d.textContent = css; else { var st = document.createElement('style'); st.textContent = css; d.replaceWith(st); }
+          } catch (e) { }
+          break;
+      }
+    }
+    var bg = 'rgba(0, 0, 0, 0)';
+    [document.body, doc].forEach(function (e) { var c = e && getComputedStyle(e).backgroundColor; if (bg === 'rgba(0, 0, 0, 0)' && c) bg = c; });
+    if (bg === 'rgba(0, 0, 0, 0)') bg = '#fff';
+    return Promise.all(jobs).then(function () {
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="' + scrollX + ' ' + scrollY + ' ' + w + ' ' + h + '">' +
+        '<foreignObject width="' + Math.max(doc.scrollWidth, w) + '" height="' + Math.max(doc.scrollHeight, h) + '">' +
+        new XMLSerializer().serializeToString(clone) + '</foreignObject></svg>';
+      return new Promise(function (res, rej) {
+        var img = new Image();
+        img.onerror = function () { rej(new Error('the page could not be drawn')); };
+        img.onload = function () {
+          try {
+            var c = document.createElement('canvas'), r = Math.min(window.devicePixelRatio || 1, 2), g = c.getContext('2d');
+            c.width = w * r; c.height = h * r; g.scale(r, r);
+            g.fillStyle = bg; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+            c.toBlob(function (b) { // thumbnails are 2 MB at most: a busy page goes as JPEG
+              if (b && b.size <= 2 << 20) return res(b);
+              c.toBlob(function (j) { if (j) res(j); else rej(new Error('the page could not be drawn')); }, 'image/jpeg', 0.85);
+            }, 'image/png');
+          } catch (e) { rej(e); }
+        };
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      });
+    });
   }
 
   function capDecl(name) { return info && info.capabilities ? info.capabilities[name] : undefined; }
