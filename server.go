@@ -84,6 +84,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /a/{id}/source", s.handleSource)
 	mux.HandleFunc("GET /a/{id}/source/v/{n}", s.handleSource)
 	mux.HandleFunc("GET /c/{id}/{n}", s.handleFrame)
+	mux.HandleFunc("GET /a/{id}/thumb", s.handleThumb)
 
 	// browser auth
 	mux.HandleFunc("GET /auth/login", s.handleLogin)
@@ -99,6 +100,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/artifacts/{id}/share", s.apiShare)
 	mux.HandleFunc("POST /api/artifacts/{id}/meta", s.apiMeta)
 	mux.HandleFunc("POST /api/artifacts/{id}/duplicate", s.apiDuplicate)
+	mux.HandleFunc("POST /api/artifacts/{id}/thumb", s.apiThumb)
 	mux.HandleFunc("DELETE /api/artifacts/{id}", s.apiDelete)
 	mux.HandleFunc("GET /api/tokens", s.apiTokens)
 	mux.HandleFunc("POST /api/tokens", s.apiCreateToken)

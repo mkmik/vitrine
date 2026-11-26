@@ -223,8 +223,32 @@ func TestArtifactsAndVersions(t *testing.T) {
 		if _, e := st.docWrite(a.ID, docs, v, WriteOp{Op: "set", Path: "items/a", Data: map[string]any{"n": 1}}, 1<<20, 100); e != nil {
 			t.Fatal(e)
 		}
+		must(t, st.setThumb(a.ID, 640, "", nil))
+		if y, img := st.thumbMeta(a.ID); y != 640 || img != 0 {
+			t.Fatalf("thumb scroll: %d %d", y, img)
+		}
+		png := []byte("\x89PNG\r\n\x1a\n\x00rest")
+		must(t, st.setThumb(a.ID, 0, "image/png", png))
+		for _, q := range []string{"", "Renamed"} {
+			items, err := st.listFor(u, q, 50, 0)
+			must(t, err)
+			if len(items) == 0 {
+				t.Fatalf("list %q: %+v", q, items)
+			}
+			for _, it := range items {
+				if it.ID == a.ID && (it.ThumbImg == 0 || it.ThumbY != 0) || it.ID == md.ID && it.ThumbImg != 0 {
+					t.Fatalf("list %q thumb: %+v", q, it)
+				}
+			}
+		}
+		if m, d, err := st.thumbImage(a.ID); err != nil || m != "image/png" || string(d) != string(png) {
+			t.Fatalf("thumb image: %v %q %q", err, m, d)
+		}
+		if _, _, err := st.thumbImage(md.ID); err != errNotFound {
+			t.Fatalf("no thumb: %v", err)
+		}
 		must(t, st.deleteArtifact(a.ID))
-		for _, tbl := range []string{"artifacts", "versions", "grants", "docs", "artifacts_fts"} {
+		for _, tbl := range []string{"artifacts", "versions", "grants", "docs", "artifacts_fts", "thumbs"} {
 			var n int
 			col := "artifact_id"
 			if tbl == "artifacts" || tbl == "artifacts_fts" {
@@ -504,6 +528,7 @@ func TestMigrateStoreRoundTrip(t *testing.T) {
 	src.setGrant(a.ID, Grant{Audience: "public", Level: "view", Pinned: 1})
 	src.docWrite(a.ID, &Caps{DB: &DBCap{}}, Viewer{UID: u.ID, Level: lvOwner}, WriteOp{Op: "set", Path: "items/a", Data: map[string]any{"n": 1}}, 1<<20, 100)
 	src.createPAT(u.ID, "cli")
+	src.setThumb(a.ID, 0, "image/png", []byte("\x89PNG\x00\xff"))
 
 	pgURL := pgDatabase(t)
 	pg, err := openStore(pgURL)
@@ -533,6 +558,9 @@ func TestMigrateStoreRoundTrip(t *testing.T) {
 		h, _ := st.versionHTML(a.ID, 1)
 		if h != "<p>walrus 🦭</p>" {
 			t.Fatalf("version 1 after copy: %q", h)
+		}
+		if _, d, _ := st.thumbImage(a.ID); string(d) != "\x89PNG\x00\xff" {
+			t.Fatalf("thumb after copy: %q", d)
 		}
 		gs, _ := st.grants(a.ID)
 		if len(gs) != 1 || gs[0].Pinned != 1 {

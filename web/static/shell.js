@@ -36,6 +36,7 @@
     var lv = LV[state.level] || 0;
     $('renameBtn').hidden = lv < LV.edit;
     $('dupBtn').hidden = !boot.can_create;
+    $('thumbBtn').hidden = lv < LV.edit;
     $('title').disabled = $('renameBtn').hidden && $('dupBtn').hidden;
     $('edited').textContent = state.updated ? 'Edited ' + fmtTime(state.updated) : '';
     var label = 'v' + state.shown;
@@ -75,6 +76,7 @@
     if (A.kind === 'markdown' && mdPos && mdPos.y > 0) {
       at = '?vy=' + (mdPos.y | 0) + (mdPos.a ? '&va=' + encodeURIComponent(mdPos.a) + '&vi=' + (mdPos.i | 0) + '&vo=' + (mdPos.o | 0) : '');
     }
+    if (A.kind !== 'markdown') mdPos = null; // a page opens at the top
     frame.src = '/c/' + A.id + '/' + n + at;
     render();
   }
@@ -127,6 +129,40 @@
     menu.hidePopover();
     api('POST', '/api/artifacts/' + A.id + '/duplicate', { version: state.follow ? 0 : state.shown })
       .then(function (j) { location.href = '/a/' + j.id; }, function (e) { alert(e.message); });
+  });
+
+  // thumbnail: the page at a scroll offset ("current view"), or an uploaded image
+  var thumb = boot.thumb || { y: 0, img: 0 }, pick = null;
+  function showThumb(p) {
+    var box = $('thumbPrev'), paper = el('div', { class: 'paper' });
+    box.textContent = ''; box.appendChild(paper);
+    if (p.file || p.img) paper.appendChild(el('img', { alt: '', src: p.file ? URL.createObjectURL(p.file) : '/a/' + A.id + '/thumb?v=' + p.img }));
+    else paper.appendChild(el('iframe', { src: '/c/' + A.id + '/' + state.shown + '?raw=1' + (p.y ? '&vy=' + p.y : ''), tabindex: '-1', 'aria-hidden': 'true',
+      sandbox: 'allow-scripts', referrerpolicy: 'no-referrer' }));
+    box.style.setProperty('--s', paper.clientWidth / 1024);
+  }
+  $('thumbBtn').addEventListener('click', function () {
+    menu.hidePopover();
+    pick = null; $('thumbErr').textContent = '';
+    $('thumbDlg').showModal();
+    showThumb(thumb);
+  });
+  $('thumbView').addEventListener('click', function () { pick = { y: mdPos ? mdPos.y : 0 }; showThumb(pick); });
+  $('thumbUp').addEventListener('click', function () { $('thumbFile').click(); });
+  $('thumbFile').addEventListener('change', function () {
+    var f = this.files[0]; this.value = '';
+    if (!f) return;
+    if (f.size > 2 << 20) { $('thumbErr').textContent = 'Image too large (2 MB at most).'; return; }
+    $('thumbErr').textContent = '';
+    pick = { file: f }; showThumb(pick);
+  });
+  $('thumbSave').addEventListener('click', function () {
+    if (!pick) return $('thumbDlg').close();
+    var body = pick.file || JSON.stringify({ y: pick.y });
+    fetch('/api/artifacts/' + A.id + '/thumb', { method: 'POST', credentials: 'same-origin', body: body,
+      headers: { 'Content-Type': pick.file ? pick.file.type || 'application/octet-stream' : 'application/json', 'X-CSRF': boot.csrf || '' } })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) throw new Error(j.error || r.statusText); return j; }); })
+      .then(function (j) { thumb = j; $('thumbDlg').close(); }, function (e) { $('thumbErr').textContent = e.message; });
   });
 
   // history panel

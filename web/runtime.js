@@ -93,6 +93,16 @@
   if (framed) {
     post({ t: 'hello' });
     var tries = 0, iv = setInterval(function () { if (info || ++tries > 20) return clearInterval(iv); post({ t: 'hello' }); }, 500);
+    // the viewer remembers where the page is scrolled (for "use current view" thumbnails)
+    var scrollT = 0;
+    window.addEventListener('scroll', function () {
+      if (scrollT) return;
+      scrollT = setTimeout(function () { scrollT = 0; try { parentWin.postMessage({ __vitrine_md: 1, y: Math.round(window.scrollY) }, '*'); } catch (e) { } }, 150);
+    }, { passive: true });
+  }
+  if (CFG.y > 0) { // opened scrolled down: a thumbnail; again on load, after late layout
+    var goY = function () { window.scrollTo(0, CFG.y); };
+    document.addEventListener('DOMContentLoaded', goY); window.addEventListener('load', goY); setTimeout(goY, 800);
   }
 
   function capDecl(name) { return info && info.capabilities ? info.capabilities[name] : undefined; }
