@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"regexp"
@@ -39,8 +40,9 @@ var runtimeSrc = sync.OnceValue(func() string {
 	return strings.ReplaceAll(string(h)+"\n"+string(b), "</script", "<\\/script")
 })
 
-func (s *Server) runtimeJS(mode string) string {
-	cfg, _ := json.Marshal(map[string]string{"mode": mode})
+// runtimeJS configures the page runtime; y > 0 opens the page scrolled down that far.
+func (s *Server) runtimeJS(mode string, y int) string {
+	cfg, _ := json.Marshal(map[string]any{"mode": mode, "y": y})
 	return "window.__vitrine_cfg=" + string(cfg) + ";\n" + runtimeSrc()
 }
 
@@ -223,10 +225,11 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 			"pinned": acc.Pinned, "level": levelName(acc.Level), "caps": a.Caps().Names, "url": s.artifactURL(a.ID), "kind": a.Kind,
 			"updated_at": a.UpdatedAt,
 		},
+		"thumb": func() map[string]any { y, img := s.st.thumbMeta(a.ID); return map[string]any{"y": y, "img": img} }(),
 	}))
 }
 
-func (s *Server) serveContent(w http.ResponseWriter, a *Artifact, html, mode, ancestors string) {
+func (s *Server) serveContent(w http.ResponseWriter, a *Artifact, html, mode, ancestors string, y int) {
 	h := w.Header()
 	if a.Kind == kindMarkdown {
 		nonce := randToken("")[:22]
@@ -235,7 +238,7 @@ func (s *Server) serveContent(w http.ResponseWriter, a *Artifact, html, mode, an
 		return
 	}
 	contentHeaders(h, s.contentCSP(ancestors))
-	w.Write([]byte(injectRuntime(html, s.runtimeJS(mode))))
+	w.Write([]byte(injectRuntime(html, s.runtimeJS(mode, y))))
 }
 
 // handleFrame serves a version for the shell's sandboxed iframe.
@@ -266,7 +269,8 @@ func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("raw") == "1" {
 		mode = "raw"
 	}
-	s.serveContent(w, a, html, mode, "'self'")
+	y, _ := strconv.Atoi(r.URL.Query().Get("vy")) // documents read it themselves
+	s.serveContent(w, a, html, mode, "'self'", max(y, 0))
 }
 
 func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
@@ -507,6 +511,69 @@ func (s *Server) apiDuplicate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"id": na.ID, "url": s.artifactURL(na.ID)})
+}
+
+// handleThumb serves an artifact's uploaded thumbnail image.
+func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
+	a, err := s.st.artifact(r.PathValue("id"))
+	if err != nil || s.st.accessFor(a, s.userOf(r)).Level == lvNone {
+		http.NotFound(w, r)
+		return
+	}
+	mime, data, err := s.st.thumbImage(a.ID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", mime)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	h.Set("Cache-Control", "private, max-age=86400") // the URL carries ?v=<changed at>
+	w.Write(data)
+}
+
+const maxThumb = 2 << 20
+
+var thumbTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/webp": true, "image/gif": true}
+
+// apiThumb sets the thumbnail: a JSON {"y": n} shows the page scrolled to n
+// (0 = the top, the default); an image body replaces it with that image.
+func (s *Server) apiThumb(w http.ResponseWriter, r *http.Request) {
+	_, a, _ := s.loadForAPI(w, r, lvEdit)
+	if a == nil {
+		return
+	}
+	var err error
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var req struct {
+			Y int `json:"y"`
+		}
+		if err := readBody(r, &req); err != nil {
+			writeJSON(w, 400, map[string]string{"error": "bad json"})
+			return
+		}
+		err = s.st.setThumb(a.ID, max(req.Y, 0), "", nil)
+	} else {
+		b, rerr := io.ReadAll(http.MaxBytesReader(w, r.Body, maxThumb))
+		if rerr != nil {
+			writeJSON(w, 413, map[string]string{"error": "image too large (2 MB at most)"})
+			return
+		}
+		// trust the bytes, not the header: never store something a browser would run (SVG, HTML)
+		mime := http.DetectContentType(b)
+		if !thumbTypes[mime] {
+			writeJSON(w, 400, map[string]string{"error": "use a PNG, JPEG, WebP or GIF image"})
+			return
+		}
+		err = s.st.setThumb(a.ID, 0, mime, b)
+	}
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	y, img := s.st.thumbMeta(a.ID)
+	writeJSON(w, 200, map[string]any{"y": y, "img": img})
 }
 
 func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {

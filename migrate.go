@@ -9,7 +9,7 @@ import (
 )
 
 // copyTables are copied in this order; the search index is rebuilt instead.
-var copyTables = []string{"users", "sessions", "tokens", "oauth_clients", "oauth_codes", "login_states", "artifacts", "versions", "grants", "docs"}
+var copyTables = []string{"users", "sessions", "tokens", "oauth_clients", "oauth_codes", "login_states", "artifacts", "versions", "grants", "docs", "thumbs"}
 
 // cmdMigrateStore copies a whole store between backends, either way:
 //
@@ -77,7 +77,7 @@ func migrateStore(src, dst *Store) (map[string]int, error) {
 				return nil, fmt.Errorf("%s: %w", t, err)
 			}
 			for i, v := range vals {
-				if b, ok := v.([]byte); ok && t != "versions" { // SQLite may hand text back as bytes
+				if b, ok := v.([]byte); ok && cols[i] != "html" && cols[i] != "data" { // SQLite may hand text back as bytes
 					vals[i] = string(b)
 				} else if s, ok := v.(string); ok {
 					vals[i] = noNUL(s)

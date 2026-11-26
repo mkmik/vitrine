@@ -66,13 +66,28 @@
       });
     }
     return el('a', { class: 'card', href: '/a/' + it.id }, [
-      el('div', { class: 'card-title', text: it.title }),
-      it.description ? el('p', { class: 'muted small desc', text: it.description }) : null,
-      snip,
-      el('div', { class: 'meta' }, [el('span', { class: 'muted small', text: 'v' + it.head + ' · ' + ago(it.updated_at) }),
-        it.kind === 'markdown' ? el('span', { class: 'tag kind', text: 'doc' }) : null, badge(it)])
+      thumb(it),
+      el('div', { class: 'card-body' }, [
+        el('div', { class: 'card-title', text: it.title }),
+        it.description ? el('p', { class: 'muted small desc', text: it.description }) : null,
+        snip,
+        el('div', { class: 'meta' }, [el('span', { class: 'muted small', text: (it.kind === 'markdown' ? 'Doc · ' : '') + ago(it.updated_at) }), badge(it)])
+      ])
     ]);
   }
+  // The thumbnail is the page itself, scaled down (lazily, inert), unless an image was uploaded.
+  function thumb(it) {
+    var paper = el('div', { class: 'paper' }, [it.thumb_img
+      ? el('img', { src: '/a/' + it.id + '/thumb?v=' + it.thumb_img, alt: '', loading: 'lazy' })
+      : el('iframe', { src: '/c/' + it.id + '/0?raw=1' + (it.thumb_y ? '&vy=' + it.thumb_y : ''), loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true',
+        sandbox: 'allow-scripts', referrerpolicy: 'no-referrer' })]);
+    return el('div', { class: 'thumb' }, [paper]);
+  }
+  // scaled frames render at 1024px wide: set the scale from the paper's real width
+  new ResizeObserver(function () {
+    var p = list.querySelector('.paper');
+    if (p) list.style.setProperty('--s', p.clientWidth / 1024);
+  }).observe(list);
   function fetchList(reset) {
     if (reset) { last = 0; list.textContent = ''; }
     api('GET', '/api/artifacts?q=' + encodeURIComponent(search.value) + (last ? '&before=' + last : '')).then(function (j) {
@@ -83,6 +98,7 @@
         ]));
       }
       j.items.forEach(function (it) { list.appendChild(card(it)); last = it.updated_at; });
+      var p = list.querySelector('.paper'); if (p) list.style.setProperty('--s', p.clientWidth / 1024);
       more.hidden = j.items.length < 60;
     }).catch(function (e) { list.textContent = e.message; });
   }

@@ -56,6 +56,7 @@ flowchart LR
 | Page hardening | ✅ | blocks WebRTC, child frames, self-navigation, popups, network hints |
 | Reading position for documents | ✅ | |
 | Title menu: rename, duplicate | ✅ | duplicate copies the shown version, not its `db` data |
+| Gallery thumbnails | 🟡 | the page itself, scaled down; editors can pick a scroll position ("use current view") or upload an image. Store tests only, no browser test yet |
 
 ## Page runtime (`claude.use(...)`)
 

@@ -24,7 +24,8 @@
 ## Routes
 
 - `/a/<id>` shell (live head, or the viewer's pinned version), `/a/<id>/v/<n>` fixed version,
-  `/a/<id>/raw` bare page (no runtime), `/c/<id>/<n>` frame content (sandboxed, opaque origin)
+  `/a/<id>/raw` bare page (no runtime), `/c/<id>/<n>` frame content (sandboxed, opaque origin; `?vy=<px>` opens it scrolled down),
+  `/a/<id>/thumb` uploaded thumbnail image
 - `/mcp` MCP; `/.well-known/oauth-*`, `/oauth/*` OAuth for MCP clients
 - `/` index + search, `/settings` connect agents and personal tokens
 

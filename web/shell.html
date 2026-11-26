@@ -17,6 +17,7 @@
     <div class="menu-head" id="edited"></div>
     <button id="renameBtn"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>Rename</button>
     <button id="dupBtn"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M9 9h11v11H9zM15 9V4H4v11h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>Duplicate</button>
+    <button id="thumbBtn"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 5h16v14H4zM4 15l4-4 4 4 3-3 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>Edit thumbnail</button>
   </div>
   <span class="ver" id="ver"></span>
   <button class="badge" id="badge" hidden></button>
@@ -53,6 +54,19 @@
     <p class="muted small">Viewers can't change the page's shared data; interactors can. A version other than “live” keeps showing that version.</p>
     <p class="err" id="shareErr"></p>
     <div class="row"><button type="button" id="shareCopy">Copy link</button></div>
+  </form>
+</dialog>
+<dialog id="thumbDlg">
+  <form method="dialog" class="dlg">
+    <div class="panel-head"><b>Edit thumbnail</b><button class="icon" value="" aria-label="Close">✕</button></div>
+    <div class="thumb" id="thumbPrev"></div>
+    <div class="row thumb-src">
+      <button type="button" id="thumbView"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 8h3l2-3h6l2 3h3v11H4zM12 10a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>Use current view</button>
+      <button type="button" id="thumbUp"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M12 16V4M7 9l5-5 5 5M4 20h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Upload image</button>
+      <input type="file" id="thumbFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+    </div>
+    <p class="err" id="thumbErr"></p>
+    <div class="row end"><button value="">Cancel</button><button type="button" class="primary" id="thumbSave">Save</button></div>
   </form>
 </dialog>
 <dialog id="consent">

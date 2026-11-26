@@ -123,6 +123,13 @@ CREATE TABLE IF NOT EXISTS docs (
   PRIMARY KEY (artifact_id, path)
 );
 CREATE INDEX IF NOT EXISTS docs_coll ON docs(artifact_id, coll);
+CREATE TABLE IF NOT EXISTS thumbs (
+  artifact_id TEXT PRIMARY KEY,
+  y INTEGER NOT NULL DEFAULT 0,
+  mime TEXT NOT NULL DEFAULT '',
+  data BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `
 
 // openStore opens the store named by VITRINE_DB: a postgres:// URL, or a
@@ -612,7 +619,7 @@ func (s *Store) deleteArtifact(id string) error {
 	}
 	defer tx.Rollback()
 	for _, q := range []string{`DELETE FROM artifacts WHERE id=?`, `DELETE FROM versions WHERE artifact_id=?`, `DELETE FROM artifacts_fts WHERE id=?`,
-		`DELETE FROM grants WHERE artifact_id=?`, `DELETE FROM docs WHERE artifact_id=?`} {
+		`DELETE FROM grants WHERE artifact_id=?`, `DELETE FROM docs WHERE artifact_id=?`, `DELETE FROM thumbs WHERE artifact_id=?`} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
@@ -626,6 +633,8 @@ type ListItem struct {
 	Level      string  `json:"level"`
 	Grants     []Grant `json:"grants,omitempty"`
 	Snippet    string  `json:"snippet,omitempty"`
+	ThumbY     int     `json:"thumb_y,omitempty"`
+	ThumbImg   int64   `json:"thumb_img,omitempty"` // when the uploaded image changed; 0 = none
 }
 
 // listFor returns artifacts the user owns or has a person/users grant for, newest first.
@@ -637,22 +646,25 @@ func (s *Store) listFor(u *User, query string, limit int, before int64) ([]ListI
 		before = 1 << 62
 	}
 	args := []any{u.ID, "email:" + u.Email}
-	q := `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''), ''
-		FROM artifacts a LEFT JOIN users ou ON ou.id=a.owner_id
+	// thumbnail: scroll offset, and when the uploaded image (if any) last changed
+	const sel = `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''),
+		COALESCE(t.y, 0), CASE WHEN t.mime <> '' THEN t.updated_at ELSE 0 END, `
+	const from = ` JOIN artifacts a ON a.id=f.id LEFT JOIN users ou ON ou.id=a.owner_id LEFT JOIN thumbs t ON t.artifact_id=a.id`
+	q := sel + `''
+		FROM artifacts a LEFT JOIN users ou ON ou.id=a.owner_id LEFT JOIN thumbs t ON t.artifact_id=a.id
 		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users')))`
 	if query != "" && s.db.pg {
 		tsq := pgTSQuery(query)
 		if tsq == "" {
 			return nil, nil
 		}
-		q = `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''),
-			ts_headline('english', f.body, tq, 'StartSel=«, StopSel=», MaxWords=14, MinWords=6, MaxFragments=1, FragmentDelimiter=…')
-		FROM artifacts_fts f JOIN artifacts a ON a.id=f.id LEFT JOIN users ou ON ou.id=a.owner_id, to_tsquery('english', ?) tq
+		q = sel + `ts_headline('english', f.body, tq, 'StartSel=«, StopSel=», MaxWords=14, MinWords=6, MaxFragments=1, FragmentDelimiter=…')
+		FROM artifacts_fts f` + from + `, to_tsquery('english', ?) tq
 		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users'))) AND f.tsv @@ tq`
 		args = append([]any{tsq}, args...)
 	} else if query != "" {
-		q = `SELECT a.id, a.owner_id, a.title, a.description, a.head, a.capabilities, a.created_at, a.updated_at, a.kind, COALESCE(ou.email,''), snippet(artifacts_fts, 3, '«', '»', '…', 12)
-		FROM artifacts_fts f JOIN artifacts a ON a.id=f.id LEFT JOIN users ou ON ou.id=a.owner_id
+		q = sel + `snippet(artifacts_fts, 3, '«', '»', '…', 12)
+		FROM artifacts_fts f` + from + `
 		WHERE (a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users'))) AND artifacts_fts MATCH ?`
 		args = append(args, ftsQuery(query))
 	}
@@ -668,13 +680,40 @@ func (s *Store) listFor(u *User, query string, limit int, before int64) ([]ListI
 		a := &Artifact{}
 		var caps string
 		li := ListItem{Artifact: a}
-		if err := rows.Scan(&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Head, &caps, &a.CreatedAt, &a.UpdatedAt, &a.Kind, &li.OwnerEmail, &li.Snippet); err != nil {
+		if err := rows.Scan(&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Head, &caps, &a.CreatedAt, &a.UpdatedAt, &a.Kind, &li.OwnerEmail, &li.ThumbY, &li.ThumbImg, &li.Snippet); err != nil {
 			return nil, err
 		}
 		a.Capabilities = json.RawMessage(caps)
 		out = append(out, li)
 	}
 	return out, rows.Err()
+}
+
+// ---- thumbnails ----
+// A thumbnail is the page itself, scrolled to y, unless an image was uploaded.
+
+func (s *Store) setThumb(id string, y int, mime string, data []byte) error {
+	if data == nil {
+		data = []byte{}
+	}
+	_, err := s.db.Exec(`INSERT INTO thumbs(artifact_id, y, mime, data, updated_at) VALUES(?, ?, ?, ?, ?)
+		ON CONFLICT(artifact_id) DO UPDATE SET y=excluded.y, mime=excluded.mime, data=excluded.data, updated_at=excluded.updated_at`,
+		id, y, mime, data, now())
+	return err
+}
+
+// thumbMeta returns the scroll offset and when the uploaded image changed (0: none).
+func (s *Store) thumbMeta(id string) (y int, img int64) {
+	s.db.QueryRow(`SELECT y, CASE WHEN mime <> '' THEN updated_at ELSE 0 END FROM thumbs WHERE artifact_id=?`, id).Scan(&y, &img)
+	return
+}
+
+func (s *Store) thumbImage(id string) (mime string, data []byte, err error) {
+	err = s.db.QueryRow(`SELECT mime, data FROM thumbs WHERE artifact_id=? AND mime <> ''`, id).Scan(&mime, &data)
+	if err == sql.ErrNoRows {
+		err = errNotFound
+	}
+	return
 }
 
 var wordRE = regexp.MustCompile(`[\p{L}\p{N}_]+`)

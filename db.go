@@ -219,6 +219,16 @@ CREATE TABLE docs (
 );
 CREATE INDEX docs_coll ON docs(artifact_id, coll);
 `,
+	// 2: thumbnails
+	`
+CREATE TABLE thumbs (
+  artifact_id TEXT COLLATE "C" PRIMARY KEY,
+  y INTEGER NOT NULL DEFAULT 0,
+  mime TEXT NOT NULL DEFAULT '',
+  data BYTEA NOT NULL,
+  updated_at BIGINT NOT NULL
+);
+`,
 }
 
 const pgLockKey = 0x76697472696e65 // "vitrine"
