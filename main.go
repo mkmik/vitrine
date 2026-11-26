@@ -45,6 +45,7 @@ type Config struct {
 	LogoutURL         string   // where the browser goes after sign-out
 	AllowSignIn       []string // emails or @domains; empty = anyone the IdP signs in
 	Creators          []string // emails or @domains allowed to create; empty = any user
+	OrgName           string   // shown as "Anyone at <OrgName>" in the share dialog
 	LLMURL            string   // Anthropic-Messages-compatible base, e.g. https://llm.int.exe.xyz
 	LLMHeader         string   // optional "Name: value" added to LLM requests
 	ModelQuick        string
@@ -114,6 +115,7 @@ func loadConfig() *Config {
 		LogoutURL:         env("VITRINE_LOGOUT_URL", ""),
 		AllowSignIn:       splitList(env("VITRINE_ALLOW_SIGNIN", "")),
 		Creators:          splitList(env("VITRINE_CREATORS", "")),
+		OrgName:           env("VITRINE_ORG_NAME", ""),
 		LLMURL:            strings.TrimRight(env("VITRINE_LLM_URL", ""), "/"),
 		LLMHeader:         env("VITRINE_LLM_HEADER", ""),
 		ModelQuick:        env("VITRINE_MODEL_QUICK", "claude-haiku-5-5"),

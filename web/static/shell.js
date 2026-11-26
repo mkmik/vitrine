@@ -113,17 +113,72 @@
   document.querySelector('#history [data-close]').addEventListener('click', function () { $('history').hidden = true; });
 
   // share dialog
-  function audLabel(a) { return a === 'public' ? 'Anyone with the link' : a === 'users' ? 'Everyone who can sign in' : a.replace(/^email:/, ''); }
+  var LVNAME = { view: 'Viewer', interact: 'Interactor', edit: 'Editor' };
+  var ICON = {
+    lock: 'M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z',
+    org: 'M4 21V4h10v17M14 9h6v12M2 21h20M7 8h2M7 12h2M7 16h2',
+    globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18'
+  };
+  function icon(name) {
+    var ns = 'http://www.w3.org/2000/svg', s = document.createElementNS(ns, 'svg'), p = document.createElementNS(ns, 'path');
+    s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('width', '18'); s.setAttribute('height', '18');
+    p.setAttribute('d', ICON[name]); p.setAttribute('fill', 'none'); p.setAttribute('stroke', 'currentColor');
+    p.setAttribute('stroke-width', '1.8'); p.setAttribute('stroke-linecap', 'round'); p.setAttribute('stroke-linejoin', 'round');
+    s.appendChild(p);
+    return el('span', { class: 'avatar' }, [s]);
+  }
+  function initials(s) { return (s.match(/\b\w/g) || ['?']).slice(0, 2).join('').toUpperCase(); }
+  // sel builds a <select> from [value, label] pairs with value cur picked.
+  function sel(opts, cur, onchange) {
+    var s = el('select', { class: 'quiet', onchange: function () { onchange(s.value); } },
+      opts.map(function (o) { return el('option', { value: o[0], text: o[1] }); }));
+    s.value = String(cur);
+    return s;
+  }
+  function verOpts(cur) {
+    var o = [['0', 'Live']];
+    for (var v = state.head; v >= 1 && v > state.head - 30; v--) o.push([String(v), 'v' + v]);
+    if (cur > 0 && cur <= state.head - 30) o.push([String(cur), 'v' + cur]);
+    return o;
+  }
+  function row(avatar, name, sub, controls) {
+    return el('div', { class: 'grant' }, [avatar, el('div', { class: 'who' }, [name, sub && el('div', { class: 'muted small', text: sub })])].concat(controls));
+  }
   function renderGrants(gs) {
-    var box = $('grants'); box.textContent = '';
-    box.appendChild(el('div', { class: 'grant' }, [el('span', { text: 'You' }), el('span', { class: 'muted', text: 'owner' })]));
-    (gs || []).forEach(function (g) {
-      box.appendChild(el('div', { class: 'grant' }, [
-        el('span', { text: audLabel(g.audience) }),
-        el('span', { class: 'muted', text: g.level + (g.pinned ? ' · v' + g.pinned : ' · live') }),
-        el('button', { class: 'small', type: 'button', text: 'Remove', onclick: function () { share(g.audience.replace(/^email:/, ''), 'none', 0); } })
+    gs = gs || [];
+    var me = boot.user || {}, people = $('people'), gen = $('general');
+    people.textContent = ''; gen.textContent = '';
+    people.appendChild(row(el('span', { class: 'avatar me', text: initials(me.name || me.email || '?') }),
+      el('div', {}, [me.name || me.email || 'You', el('span', { class: 'muted', text: ' (you)' })]), me.name ? me.email : '',
+      [el('span', { class: 'muted small', text: 'Owner' })]));
+    gs.forEach(function (g) {
+      if (g.audience.indexOf('email:') !== 0) return;
+      var email = g.audience.slice(6);
+      people.appendChild(row(el('span', { class: 'avatar', text: initials(email.split('@')[0]) }), el('div', { text: email }), '', [
+        g.level === 'edit' ? null : sel(verOpts(g.pinned), g.pinned || 0, function (v) { share(email, g.level, +v); }),
+        sel([['view', 'Viewer'], ['interact', 'Interactor'], ['edit', 'Editor'], ['none', 'Remove access']], g.level,
+          function (l) { share(email, l, l === 'edit' ? 0 : g.pinned || 0); })
       ]));
     });
+    // General access is one choice; public wins if an older setup left both grants.
+    var by = {}; gs.forEach(function (g) { by[g.audience] = g; });
+    var cur = by.public || by.users || null, aud = cur ? cur.audience : '';
+    var org = boot.org ? 'Anyone at ' + boot.org : 'Anyone who can sign in';
+    var hint = { '': 'Only the people above can open it.', users: 'Anyone who signs in here can open it.', public: 'Anyone with the link, no sign-in needed.' };
+    var setAud = function (a) {
+      var drop = function (x) { return by[x] && x !== a ? share(x, 'none', 0) : null; };
+      var lvl = cur ? cur.level : 'view';
+      if (a === 'public' && lvl === 'edit') lvl = 'interact';
+      (a ? share(a, lvl, cur && lvl !== 'edit' ? cur.pinned || 0 : 0) : Promise.resolve())
+        .then(function () { return drop('users'); }).then(function () { return drop('public'); }).catch(function () { });
+    };
+    var lvls = [['view', 'Viewer'], ['interact', 'Interactor']].concat(aud === 'users' ? [['edit', 'Editor']] : []);
+    gen.appendChild(row(icon(aud === 'public' ? 'globe' : aud ? 'org' : 'lock'),
+      sel([['', 'Restricted'], ['users', org], ['public', 'Anyone with the link']], aud, setAud), hint[aud],
+      cur ? [
+        cur.level === 'edit' ? null : sel(verOpts(cur.pinned), cur.pinned || 0, function (v) { share(aud, cur.level, +v); }),
+        sel(lvls, cur.level, function (l) { share(aud, l, l === 'edit' ? 0 : cur.pinned || 0); })
+      ] : []));
   }
   function share(who, level, version) {
     $('shareErr').textContent = '';
@@ -131,18 +186,18 @@
       .catch(function (e) { $('shareErr').textContent = e.message; throw e; });
   }
   $('shareBtn').addEventListener('click', function () {
-    $('shareUrl').textContent = A.url;
-    var pin = $('pin'); pin.textContent = '';
-    pin.appendChild(el('option', { value: '0', text: 'live' }));
-    for (var v = state.head; v >= 1 && v > state.head - 30; v--) pin.appendChild(el('option', { value: String(v), text: 'pinned v' + v }));
     api('GET', '/api/artifacts/' + A.id).then(function (j) { renderGrants(j.grants); });
     $('share').showModal();
+  });
+  $('shareCopy').addEventListener('click', function () {
+    var b = this;
+    navigator.clipboard.writeText(A.url).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy link'; }, 1500); });
   });
   $('grantBtn').addEventListener('click', function (e) {
     e.preventDefault();
     var who = $('who').value.trim();
     if (!who) return;
-    share(who, $('lvl').value, +$('pin').value).then(function () { $('who').value = ''; }, function () { });
+    share(who, $('lvl').value, 0).then(function () { $('who').value = ''; }, function () { });
   });
 
   // ---------------- live connection ----------------

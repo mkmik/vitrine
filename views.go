@@ -130,7 +130,7 @@ func (s *Server) renderPage(w http.ResponseWriter, name string, boot map[string]
 
 func (s *Server) bootFor(r *http.Request, extra map[string]any) map[string]any {
 	b := map[string]any{"base": s.cfg.BaseURL, "auth": s.cfg.Auth, "mcp_url": s.cfg.BaseURL + "/mcp", "title": "Artifacts", "version": version,
-		"sample": s.cfg.LLMURL != ""}
+		"sample": s.cfg.LLMURL != "", "org": s.cfg.OrgName}
 	if ss := s.sessionOf(r); ss != nil {
 		b["user"] = map[string]string{"id": ss.User.ID, "email": ss.User.Email, "name": ss.User.DisplayName()}
 		b["csrf"] = ss.CSRF
