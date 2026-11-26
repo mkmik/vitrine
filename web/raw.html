@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{{.Title}}</title>
 <link rel="icon" href="/static/favicon.svg">
-<link rel="stylesheet" href="/static/app.css">
-<script src="/static/raw.js" defer></script>
+<link rel="stylesheet" href="/static/app.css?v={{.V}}">
+<script src="/static/raw.js?v={{.V}}" defer></script>
 </head>
 <body class="rawpage" data-boot="{{.Boot}}">
 <iframe id="frame" title="artifact" sandbox="allow-scripts allow-forms allow-downloads" allow="fullscreen; clipboard-write" referrerpolicy="no-referrer"></iframe>

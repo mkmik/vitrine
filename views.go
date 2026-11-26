@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -106,6 +109,20 @@ func (s *Server) page(name string) http.HandlerFunc {
 var (
 	tmplMu   sync.Mutex
 	pageTmpl = map[string]*template.Template{}
+	// assetVer changes whenever any file under web/static does, so pages never
+	// pair a new template with a browser-cached copy of the old script or styles.
+	assetVer = func() string {
+		h := sha256.New()
+		fs.WalkDir(webFS, "web/static", func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				b, _ := webFS.ReadFile(p)
+				h.Write([]byte(p))
+				h.Write(b)
+			}
+			return nil
+		})
+		return hex.EncodeToString(h.Sum(nil))[:10]
+	}()
 )
 
 func (s *Server) renderPage(w http.ResponseWriter, name string, boot map[string]any) {
@@ -125,7 +142,7 @@ func (s *Server) renderPage(w http.ResponseWriter, name string, boot map[string]
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	t.Execute(w, map[string]any{"Boot": string(bj), "Title": boot["title"]})
+	t.Execute(w, map[string]any{"Boot": string(bj), "Title": boot["title"], "V": assetVer})
 }
 
 func (s *Server) bootFor(r *http.Request, extra map[string]any) map[string]any {
