@@ -374,11 +374,15 @@
   function settings() {
     var mcp = boot.mcp_url;
     main.appendChild(el('h2', { text: 'Connect agents' }));
-    main.appendChild(el('p', { text: 'Add this MCP server to any agent. Clients that support MCP sign-in (Claude, ChatGPT, Claude Code) open a browser once to sign you in.' }));
+    main.appendChild(el('p', { text: 'Add this MCP server to any agent. Agents that support MCP sign-in open a browser once to sign you in.' }));
     main.appendChild(el('pre', { class: 'code', text: mcp }));
     main.appendChild(el('ul', { class: 'howto' }, [
       el('li', {}, [el('b', { text: 'Claude (web, desktop, mobile): ' }), 'Settings → Connectors → Add custom connector, paste the URL.']),
       el('li', {}, [el('b', { text: 'Claude Code: ' }), el('code', { text: 'claude mcp add --transport http artifacts ' + mcp })]),
+      el('li', {}, [el('b', { text: 'Codex: ' }), el('code', { text: 'codex mcp add artifacts --url ' + mcp }), ' then ', el('code', { text: 'codex mcp login artifacts' })]),
+      el('li', {}, [el('b', { text: 'Gemini CLI: ' }), el('code', { text: 'gemini mcp add --transport http artifacts ' + mcp }), ' then ', el('code', { text: '/mcp auth artifacts' }), ' inside Gemini']),
+      el('li', {}, [el('b', { text: 'Pi: ' }), 'no built-in MCP; ', el('code', { text: 'pi install npm:pi-mcp-adapter' }), ', then add ',
+        el('code', { text: '{"mcpServers": {"artifacts": {"url": "' + mcp + '"}}}' }), ' to ', el('code', { text: '~/.pi/agent/mcp.json' })]),
       el('li', {}, [el('b', { text: 'Static token: ' }), 'for harnesses that only take a header, create a token below and send ', el('code', { text: 'Authorization: Bearer <token>' }),
         '. The same tools also answer at ', el('code', { text: boot.base + '/api/v1/tools/<name>' }), ' (POST JSON).'])
     ]));
