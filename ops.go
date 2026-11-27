@@ -226,6 +226,9 @@ func (s *Server) opShare(a *Artifact, who, level string, version int) ([]Grant, 
 	default:
 		return nil, oerr("invalid_argument", "level must be view, interact, edit or none")
 	}
+	if aud == "public" && level != "none" && s.cfg.NoPublicSharing { // revoking stays possible
+		return nil, oerr("invalid_argument", "public sharing is turned off on this server: share with \"users\" (everyone who can sign in) or with people by email")
+	}
 	if aud == "public" && level == "edit" {
 		return nil, oerr("invalid_argument", "the public can get view or interact, never edit")
 	}

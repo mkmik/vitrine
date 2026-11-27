@@ -160,13 +160,14 @@
         img.onerror = function () { rej(new Error('the page could not be drawn')); };
         img.onload = function () {
           try {
-            var c = document.createElement('canvas'), r = Math.min(window.devicePixelRatio || 1, 2), g = c.getContext('2d');
-            c.width = w * r; c.height = h * r; g.scale(r, r);
+            // a thumbnail shows a few hundred pixels wide: 1024 is plenty and keeps the upload small
+            var c = document.createElement('canvas'), r = Math.min(window.devicePixelRatio || 1, 2, 1024 / w), g = c.getContext('2d');
+            c.width = Math.round(w * r); c.height = Math.round(h * r); g.scale(r, r);
             g.fillStyle = bg; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
-            c.toBlob(function (b) { // thumbnails are 2 MB at most: a busy page goes as JPEG
-              if (b && b.size <= 2 << 20) return res(b);
+            c.toBlob(function (b) { // WebP where the browser encodes it (Safari answers PNG), else JPEG
+              if (b && b.type === 'image/webp') return res(b);
               c.toBlob(function (j) { if (j) res(j); else rej(new Error('the page could not be drawn')); }, 'image/jpeg', 0.85);
-            }, 'image/png');
+            }, 'image/webp', 0.85);
           } catch (e) { rej(e); }
         };
         img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);

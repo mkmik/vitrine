@@ -49,7 +49,8 @@ func (s *Store) accessFor(a *Artifact, u *User) Access {
 	gs, _ := s.grants(a.ID)
 	best, pin := lvNone, 0
 	for _, g := range gs {
-		match := (g.Audience == "public" && (u != nil || !s.requireSignIn)) || (u != nil && (g.Audience == "users" || g.Audience == "email:"+u.Email))
+		// with public sharing off, a public grant made earlier opens nothing
+		match := (g.Audience == "public" && !s.noPublic && (u != nil || !s.requireSignIn)) || (u != nil && (g.Audience == "users" || g.Audience == "email:"+u.Email))
 		if !match {
 			continue
 		}

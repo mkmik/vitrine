@@ -195,7 +195,7 @@ try:
         pg.wait_for_load_state()
         check("hal@example.com" in pg.content(), "proxy: sign in from the index page in a real browser")
         pg.click("button.avatar")
-        check(pg.locator("#usermenu").get_by_text("hal@example.com").is_visible() and pg.get_by_role("menuitem", name="Sign out").is_visible(),
+        check(pg.locator("#usermenu").get_by_text("hal@example.com").is_visible() and pg.get_by_role("button", name="Sign out").is_visible(),
               "avatar opens a menu with the user's email and Sign out")
         b.close()
 finally:

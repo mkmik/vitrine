@@ -9,17 +9,20 @@
   var LV = { none: 0, view: 1, interact: 2, edit: 3, owner: 4 };
   var state = { head: A.head, shown: A.shown, follow: A.follow, level: A.level, pinned: A.pinned, title: A.title,
     caps: A.caps || [], capabilities: {}, peer: null, connected: false, gen: 0, nonce: null, pendingHead: 0, updated: A.updated_at };
-  var auto = true, mdPos = null;
+  var auto = true, mdPos = null, phone = matchMedia('(max-width: 640px)'); // phones hide the toggle: auto-refresh is on there
   try { auto = localStorage.getItem('vitrine.auto') !== '0'; } catch (e) { }
 
   function api(method, path, body) {
     return fetch(path, { method: method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF': boot.csrf || '' },
-      body: body ? JSON.stringify(body) : undefined }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (j) {
-        if (!r.ok) throw new Error((j.error && (j.error.message || j.error)) || r.statusText);
-        return j;
-      });
-    });
+      body: body ? JSON.stringify(body) : undefined }).then(readJSON);
+  }
+  // readJSON: the JSON body of an OK reply; an error reply, or an OK one whose body isn't
+  // JSON (cut short on the way, say), rejects with the best message there is
+  function readJSON(r) {
+    return r.json().then(function (j) {
+      if (!r.ok) throw new Error((j && j.error && (j.error.message || j.error)) || r.statusText);
+      return j;
+    }, function () { throw new Error(r.ok ? 'the server sent an unreadable reply' : r.statusText || 'HTTP ' + r.status); });
   }
   function fmtTime(t) { return new Date(t * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
   function el(tag, attrs, kids) {
@@ -94,6 +97,15 @@
   });
   $('reload').addEventListener('click', function () { load(state.follow ? state.head : state.shown); });
   $('badge').addEventListener('click', function () { if (state.pendingHead) load(state.pendingHead); else goVersion(state.head, true); });
+  // the title menu's "Copy link": phones hide the bar's button, and a standalone app has no address bar
+  $('copyItem').addEventListener('click', function () {
+    var label = this.querySelector('span');
+    if (!navigator.clipboard) return menu.hidePopover();
+    navigator.clipboard.writeText(A.url).then(function () {
+      label.textContent = 'Copied';
+      setTimeout(function () { menu.hidePopover(); label.textContent = 'Copy link'; }, 700);
+    }, function () { menu.hidePopover(); });
+  });
   $('copyBtn').addEventListener('click', function () {
     if (navigator.clipboard) navigator.clipboard.writeText(A.url).then(function () { $('copyBtn').textContent = 'Copied'; setTimeout(function () { $('copyBtn').textContent = 'Copy link'; }, 1500); });
   });
@@ -134,51 +146,80 @@
   });
 
   // thumbnail: the page at a scroll offset ("current view"), or an uploaded image
-  var thumb = boot.thumb || { y: 0, img: 0 }, pick = null;
+  var thumb = boot.thumb || { y: 0, img: 0 }, pick = null, previewURL = '';
+  var snapping = 0, saving = false; // snapping: the id of the capture we wait for, 0 = none
+  function syncSave() {
+    var b = $('thumbSave');
+    b.disabled = saving || !!snapping;
+    b.textContent = saving ? 'Saving…' : snapping ? 'Capturing…' : 'Save';
+  }
   function showThumb(p) {
     var box = $('thumbPrev'), paper = el('div', { class: 'paper' });
+    if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = ''; }
     box.textContent = ''; box.appendChild(paper);
-    if (p.file || p.img) paper.appendChild(el('img', { alt: '', src: p.file ? URL.createObjectURL(p.file) : '/a/' + A.id + '/thumb?v=' + p.img }));
+    if (p.file) previewURL = URL.createObjectURL(p.file);
+    if (p.file || p.img) paper.appendChild(el('img', { alt: '', src: p.file ? previewURL : '/a/' + A.id + '/thumb?v=' + p.img }));
     else paper.appendChild(el('iframe', { src: '/c/' + A.id + '/' + state.shown + '?raw=1' + (p.y ? '&vy=' + p.y : ''), tabindex: '-1', 'aria-hidden': 'true',
       sandbox: 'allow-scripts', referrerpolicy: 'no-referrer' }));
     box.style.setProperty('--s', paper.clientWidth / 1024);
   }
+  function choose(p) { snapping = 0; pick = p; $('thumbErr').textContent = ''; showThumb(p); syncSave(); }
   $('thumbBtn').addEventListener('click', function () {
     menu.hidePopover();
-    pick = null; $('thumbErr').textContent = '';
+    if (!saving) { pick = null; snapping = 0; $('thumbErr').textContent = ''; syncSave(); }
     $('thumbDlg').showModal();
-    showThumb(thumb);
+    showThumb(pick || thumb);
   });
   // a document is rendered by vitrine, so its scroll position is enough; a page may show state
   // (db, form input, canvas) a fresh copy wouldn't have, so it draws itself as an image
-  var snapping = false;
   $('thumbView').addEventListener('click', function () {
+    if (saving) return;
     $('thumbErr').textContent = '';
-    if (A.kind === 'markdown') { pick = { y: mdPos ? mdPos.y : 0 }; showThumb(pick); return; }
-    var paper = $('thumbPrev').querySelector('.paper');
-    snapping = true; toFrame({ t: 'snap', ratio: paper ? paper.clientHeight / paper.clientWidth : 0 });
+    if (A.kind === 'markdown') return choose({ y: mdPos ? mdPos.y : 0 });
+    var paper = $('thumbPrev').querySelector('.paper'), id = snapping = Date.now();
+    syncSave();
+    toFrame({ t: 'snap', ratio: paper ? paper.clientHeight / paper.clientWidth : 0 });
+    setTimeout(function () { if (snapping === id) gotSnap({ error: 'no answer' }); }, 15000);
   });
   function gotSnap(m) {
-    if (!snapping || !$('thumbDlg').open) return;
-    snapping = false;
-    if (m.blob instanceof Blob) { pick = { file: m.blob }; showThumb(pick); return; }
+    if (!snapping) return; // cancelled: another choice, a save, or the dialog was reopened
+    if (m.blob instanceof Blob) return choose({ file: m.blob });
+    snapping = 0; syncSave();
     $('thumbErr').textContent = 'Could not capture this view (' + (m.error || 'no answer') + ').';
   }
-  $('thumbUp').addEventListener('click', function () { $('thumbFile').click(); });
+  $('thumbUp').addEventListener('click', function () { if (!saving) $('thumbFile').click(); });
+  // a big photo is made thumbnail-sized before it goes up, so the upload stays small
+  function shrink(f) {
+    if (f.size <= 256 << 10 || !window.createImageBitmap) return Promise.resolve(f);
+    return createImageBitmap(f).then(function (bm) {
+      var s = Math.min(1, 1024 / bm.width), c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(bm.width * s)); c.height = Math.max(1, Math.round(bm.height * s));
+      c.getContext('2d').drawImage(bm, 0, 0, c.width, c.height); bm.close();
+      return new Promise(function (res) { c.toBlob(function (b) { res(b && b.size < f.size ? b : f); }, 'image/webp', 0.85); });
+    }, function () { return f; });
+  }
   $('thumbFile').addEventListener('change', function () {
     var f = this.files[0]; this.value = '';
-    if (!f) return;
-    if (f.size > 2 << 20) { $('thumbErr').textContent = 'Image too large (2 MB at most).'; return; }
-    $('thumbErr').textContent = '';
-    pick = { file: f }; showThumb(pick);
+    if (!f || saving) return;
+    snapping = 0; syncSave();
+    shrink(f).then(function (f) {
+      if (saving) return;
+      if (f.size > 2 << 20) { $('thumbErr').textContent = 'Image too large (2 MB at most).'; return; }
+      choose({ file: f });
+    });
   });
   $('thumbSave').addEventListener('click', function () {
+    if (saving || snapping) return;
     if (!pick) return $('thumbDlg').close();
     var body = pick.file || JSON.stringify({ y: pick.y });
+    saving = true; syncSave(); $('thumbErr').textContent = '';
     fetch('/api/artifacts/' + A.id + '/thumb', { method: 'POST', credentials: 'same-origin', body: body,
+      signal: window.AbortSignal && AbortSignal.timeout ? AbortSignal.timeout(60000) : undefined,
       headers: { 'Content-Type': pick.file ? pick.file.type || 'application/octet-stream' : 'application/json', 'X-CSRF': boot.csrf || '' } })
-      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) throw new Error(j.error || r.statusText); return j; }); })
-      .then(function (j) { thumb = j; $('thumbDlg').close(); }, function (e) { $('thumbErr').textContent = e.message; });
+      .then(readJSON)
+      .then(function (j) { thumb = j; pick = null; $('thumbDlg').close(); },
+        function (e) { $('thumbErr').textContent = e.name === 'TimeoutError' ? 'Saving took too long; try again.' : e.message; })
+      .then(function () { saving = false; syncSave(); });
   });
 
   // history panel
@@ -254,7 +295,7 @@
     var by = {}; gs.forEach(function (g) { by[g.audience] = g; });
     var cur = by.public || by.users || null, aud = cur ? cur.audience : '';
     var org = boot.org ? 'Anyone at ' + boot.org : 'Anyone who can sign in';
-    var hint = { '': 'Only the people above can open it.', users: 'Anyone who signs in here can open it.', public: 'Anyone with the link, no sign-in needed.' };
+    var hint = { '': 'Only the people above can open it.', users: 'Anyone who signs in here can open it.', public: boot.require_signin ? 'Anyone with the link, once they sign in here.' : 'Anyone with the link, no sign-in needed.' };
     var setAud = function (a) {
       var drop = function (x) { return by[x] && x !== a ? share(x, 'none', 0) : null; };
       var lvl = cur ? cur.level : 'view';
@@ -263,9 +304,15 @@
         .then(function () { return drop('users'); }).then(function () { return drop('public'); }).catch(function () { });
     };
     var lvls = [['view', 'Viewer'], ['interact', 'Interactor']].concat(aud === 'users' ? [['edit', 'Editor']] : []);
+    var auds = [['', 'Restricted'], ['users', org]];
+    if (boot.public_sharing) auds.push(['public', 'Anyone with the link']);
+    else if (aud === 'public') { // made before public sharing was turned off: it opens nothing now
+      auds.push(['public', 'Anyone with the link (off)']);
+      hint.public = 'Public links are turned off on this server, so this opens nothing. Pick another option.';
+    }
     gen.appendChild(row(icon(aud === 'public' ? 'globe' : aud ? 'org' : 'lock'),
-      sel([['', 'Restricted'], ['users', org], ['public', 'Anyone with the link']], aud, setAud), hint[aud],
-      cur ? [
+      sel(auds, aud, setAud), hint[aud],
+      cur && !(aud === 'public' && !boot.public_sharing) ? [
         cur.level === 'edit' ? null : sel(verOpts(cur.pinned), cur.pinned || 0, function (v) { share(aud, cur.level, +v); }),
         sel(lvls, cur.level, function (l) { share(aud, l, l === 'edit' ? 0 : cur.pinned || 0); })
       ] : []));
@@ -356,7 +403,7 @@
   function onHead(n) {
     if (n > state.head) state.head = n;
     if (state.follow && state.head > state.shown) {
-      if (auto) load(state.head); else state.pendingHead = state.head;
+      if (auto || phone.matches) load(state.head); else state.pendingHead = state.head;
     }
     render();
   }

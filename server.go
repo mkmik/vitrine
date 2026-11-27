@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,7 +42,7 @@ func newServer(cfg *Config, st *Store) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, st: st, base: b, mcpSessions: map[string]*mcpSession{}, limiters: map[string]*bucket{}, sampleBusy: map[string]int{}}
-	st.requireSignIn = cfg.RequireSignIn
+	st.requireSignIn, st.noPublic = cfg.RequireSignIn, cfg.NoPublicSharing
 	s.hub = newHub(s)
 	if s.trustNets, s.trustAny, err = parsePrefixes(cfg.TrustedProxies); err != nil {
 		return nil, err
@@ -195,7 +196,7 @@ func gzipMW(h http.Handler) http.Handler {
 			return
 		}
 		w.Header().Add("Vary", "Accept-Encoding")
-		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") || r.Header.Get("Range") != "" {
+		if !acceptsGzip(r.Header.Get("Accept-Encoding")) || r.Header.Get("Range") != "" {
 			h.ServeHTTP(w, r)
 			return
 		}
@@ -205,43 +206,101 @@ func gzipMW(h http.Handler) http.Handler {
 	})
 }
 
-// gzipWriter compresses a 200 response with a text body; anything else passes through.
+// acceptsGzip reads Accept-Encoding properly: "gzip;q=0" refuses gzip.
+func acceptsGzip(ae string) bool {
+	for _, part := range strings.Split(ae, ",") {
+		name, params, _ := strings.Cut(part, ";")
+		if !strings.EqualFold(strings.TrimSpace(name), "gzip") {
+			continue
+		}
+		for _, p := range strings.Split(params, ";") {
+			if k, v, ok := strings.Cut(p, "="); ok && strings.EqualFold(strings.TrimSpace(k), "q") {
+				q, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+				return err == nil && q > 0
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// gzipMin is the smallest body worth compressing. Small replies (a save's
+// JSON acknowledgement, a HEAD, a 304) go out as they are: compressing saves
+// nothing there, and some TLS-inspecting proxies mangle small fixed-length
+// gzip replies so that the browser waits for bytes that never come.
+const gzipMin = 1024
+
+// gzipWriter holds back the status and the first gzipMin bytes, then
+// compresses a 200 with a text body that reached gzipMin; anything else
+// passes through unchanged.
 type gzipWriter struct {
 	http.ResponseWriter
-	gz      *gzip.Writer
-	decided bool
+	gz   *gzip.Writer
+	code int    // status held back until the decision; 0 = none yet
+	buf  []byte // body held back until the decision
+	sent bool   // the decision is made and the header is out
 }
 
 func (g *gzipWriter) WriteHeader(code int) {
-	if !g.decided {
-		g.decided = true
-		h := g.Header()
-		ct := h.Get("Content-Type")
-		if code == http.StatusOK && h.Get("Content-Encoding") == "" && !strings.HasPrefix(ct, "text/event-stream") &&
-			(strings.HasPrefix(ct, "text/") || strings.Contains(ct, "json") || strings.Contains(ct, "javascript") || strings.HasPrefix(ct, "image/svg")) {
-			h.Del("Content-Length")
-			h.Set("Content-Encoding", "gzip")
-			g.gz = gzipPool.Get().(*gzip.Writer)
-			g.gz.Reset(g.ResponseWriter)
-		}
+	if !g.sent && g.code == 0 {
+		g.code = code
 	}
-	g.ResponseWriter.WriteHeader(code)
 }
 
 func (g *gzipWriter) Write(b []byte) (int, error) {
-	if !g.decided {
-		if g.Header().Get("Content-Type") == "" {
-			g.Header().Set("Content-Type", http.DetectContentType(b))
+	if g.sent {
+		if g.gz != nil {
+			return g.gz.Write(b)
 		}
-		g.WriteHeader(http.StatusOK)
+		return g.ResponseWriter.Write(b)
 	}
-	if g.gz != nil {
-		return g.gz.Write(b)
+	g.buf = append(g.buf, b...)
+	if len(g.buf) >= gzipMin {
+		if err := g.send(true); err != nil {
+			return 0, err
+		}
 	}
-	return g.ResponseWriter.Write(b)
+	return len(b), nil
 }
 
+// send makes the decision, writes the header and whatever body was held back.
+func (g *gzipWriter) send(big bool) error {
+	g.sent = true
+	if g.code == 0 {
+		g.code = http.StatusOK
+	}
+	h := g.Header()
+	if h.Get("Content-Type") == "" && len(g.buf) > 0 {
+		h.Set("Content-Type", http.DetectContentType(g.buf))
+	}
+	ct := h.Get("Content-Type")
+	if big && g.code == http.StatusOK && h.Get("Content-Encoding") == "" && !strings.HasPrefix(ct, "text/event-stream") &&
+		(strings.HasPrefix(ct, "text/") || strings.Contains(ct, "json") || strings.Contains(ct, "javascript") || strings.HasPrefix(ct, "image/svg")) {
+		h.Del("Content-Length")
+		h.Set("Content-Encoding", "gzip")
+		g.gz = gzipPool.Get().(*gzip.Writer)
+		g.gz.Reset(g.ResponseWriter)
+	}
+	g.ResponseWriter.WriteHeader(g.code)
+	b := g.buf
+	g.buf = nil
+	if len(b) == 0 {
+		return nil
+	}
+	var err error
+	if g.gz != nil {
+		_, err = g.gz.Write(b)
+	} else {
+		_, err = g.ResponseWriter.Write(b)
+	}
+	return err
+}
+
+// Flush sends what is held back (uncompressed if still small), so streams keep flowing.
 func (g *gzipWriter) Flush() {
+	if !g.sent {
+		g.send(len(g.buf) >= gzipMin)
+	}
 	if g.gz != nil {
 		g.gz.Flush()
 	}
@@ -251,6 +310,9 @@ func (g *gzipWriter) Flush() {
 }
 
 func (g *gzipWriter) close() {
+	if !g.sent && (g.code != 0 || len(g.buf) > 0) { // a small body, a HEAD or a 304: as it is
+		g.send(false)
+	}
 	if g.gz != nil {
 		g.gz.Close()
 		gzipPool.Put(g.gz)
@@ -376,7 +438,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		s.st.deleteSession(c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.base.Scheme == "https"})
-	next := "/"
+	w.Header().Set("Clear-Site-Data", `"cache"`) // artifact frames are kept in the browser cache, revalidated
+	next := "/?signed_out"
 	if s.cfg.LogoutURL != "" { // e.g. the proxy's or IdP's sign-out page
 		next = s.cfg.LogoutURL
 	}

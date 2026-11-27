@@ -47,6 +47,7 @@ type Config struct {
 	Creators          []string // emails or @domains allowed to create; empty = any user
 	OrgName           string   // shown as "Anyone at <OrgName>" in the share dialog
 	RequireSignIn     bool     // every page needs a signed-in user, even links shared with "public"
+	NoPublicSharing   bool     // no "anyone with the link" grants: only people and all signed-in users
 	LLMURL            string   // Anthropic-Messages-compatible base, e.g. https://llm.int.exe.xyz
 	LLMHeader         string   // optional "Name: value" added to LLM requests
 	ModelQuick        string
@@ -74,6 +75,20 @@ func envInt(k string, def int) int {
 		}
 	}
 	return def
+}
+
+// envBool reads a true/false switch; a value it can't read stops the server
+// rather than leave a security switch silently off.
+func envBool(k string) bool {
+	v := os.Getenv(k)
+	if v == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		log.Fatalf("%s=%q: use true or false", k, v)
+	}
+	return b
 }
 
 func splitList(s string) []string {
@@ -117,7 +132,8 @@ func loadConfig() *Config {
 		AllowSignIn:       splitList(env("VITRINE_ALLOW_SIGNIN", "")),
 		Creators:          splitList(env("VITRINE_CREATORS", "")),
 		OrgName:           env("VITRINE_ORG_NAME", ""),
-		RequireSignIn:     env("VITRINE_REQUIRE_SIGNIN", "") == "true",
+		RequireSignIn:     envBool("VITRINE_REQUIRE_SIGNIN"),
+		NoPublicSharing:   envBool("VITRINE_DISABLE_PUBLIC_SHARING"),
 		LLMURL:            strings.TrimRight(env("VITRINE_LLM_URL", ""), "/"),
 		LLMHeader:         env("VITRINE_LLM_HEADER", ""),
 		ModelQuick:        env("VITRINE_MODEL_QUICK", "claude-haiku-5-5"),
