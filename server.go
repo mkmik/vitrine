@@ -83,6 +83,12 @@ func (s *Server) routes() http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Write([]byte(speculationRules))
 	})
+	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) { // at the root, so its scope is the whole site
+		b, _ := webFS.ReadFile("web/sw.js")
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Write(b)
+	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 
 	// pages

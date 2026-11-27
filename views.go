@@ -131,7 +131,11 @@ func (s *Server) page(name string) http.HandlerFunc {
 		if name == "index.html" && s.base.Scheme == "https" { // browsers only prefetch over https, WebKit logs errors otherwise
 			w.Header().Set("Speculation-Rules", `"/speculationrules"`)
 		}
-		s.renderPage(w, name, s.bootFor(r, nil))
+		var extra map[string]any
+		if u := s.userOf(r); u != nil && r.URL.Path == "/" {
+			extra = map[string]any{"initial": s.firstScreen(w, r, u)}
+		}
+		s.renderPage(w, name, s.bootFor(r, extra))
 	}
 }
 
@@ -409,15 +413,24 @@ func (s *Server) apiList(w http.ResponseWriter, r *http.Request) {
 	if ss == nil {
 		return
 	}
-	qs := r.URL.Query()
-	before, _ := strconv.ParseInt(qs.Get("before"), 10, 64)
-	items, err := s.st.listFor(ss.User, qs.Get("q"), 60, before, ListFilter{Owner: qs.Get("owner"), Kind: qs.Get("kind"), Folder: qs.Get("folder")})
+	items, err := s.listItems(ss.User, r.URL.Query())
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+// listItems is one page of the artifact list, as /api/artifacts and the
+// index page's first screen both give it.
+func (s *Server) listItems(u *User, qs url.Values) ([]ListItem, error) {
+	before, _ := strconv.ParseInt(qs.Get("before"), 10, 64)
+	items, err := s.st.listFor(u, qs.Get("q"), 60, before, ListFilter{Owner: qs.Get("owner"), Kind: qs.Get("kind"), Folder: qs.Get("folder")})
+	if err != nil {
+		return nil, err
+	}
 	for i := range items {
-		acc := s.st.accessFor(items[i].Artifact, ss.User)
+		acc := s.st.accessFor(items[i].Artifact, u)
 		items[i].Level = levelName(acc.Level)
 		if acc.Level == lvOwner {
 			items[i].Grants, _ = s.st.grants(items[i].ID)
@@ -426,7 +439,41 @@ func (s *Server) apiList(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []ListItem{}
 	}
-	writeJSON(w, 200, map[string]any{"items": items})
+	return items, nil
+}
+
+// firstScreen puts the folders and the first page of artifacts the index's
+// URL asks for into the page itself, so it draws without waiting on the API.
+// The query is the one app.js's listURL() sends for that URL.
+func (s *Server) firstScreen(w http.ResponseWriter, r *http.Request, u *User) map[string]any {
+	q, key := url.Values{}, map[string]string{} // key: which view this is, for app.js to check before using it
+	for _, k := range []string{"q", "owner", "kind", "folder"} {
+		v := r.URL.Query().Get(k)
+		key[k] = v
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	if len(q) == 0 {
+		q.Set("folder", "none") // the top level lists artifacts in no folder
+	}
+	items, err := s.listItems(u, q)
+	if err != nil {
+		return nil
+	}
+	fs, err := s.st.folders(u)
+	if err != nil {
+		return nil
+	}
+	// start the thumbnails the first rows show along with the page
+	n := 0
+	for _, it := range items {
+		if it.ThumbImg != 0 && n < 12 {
+			w.Header().Add("Link", "</a/"+it.ID+"/thumb?v="+strconv.FormatInt(it.ThumbImg, 10)+">; rel=preload; as=image")
+			n++
+		}
+	}
+	return map[string]any{"key": key, "items": items, "folders": fs}
 }
 
 func (s *Server) loadForAPI(w http.ResponseWriter, r *http.Request, need int) (*Session, *Artifact, Access) {

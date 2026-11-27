@@ -17,6 +17,23 @@
         }, function () { throw new Error(r.ok ? 'the server sent an unreadable reply' : r.statusText || 'HTTP ' + r.status); });
       });
   }
+  // The index opens from the service worker's copy (web/sw.js), which may be
+  // stale or another session's: check it, and start over from the server if
+  // the session is no longer that one.
+  var swCache = 'vitrine-pages';
+  function forgetPages() { return window.caches ? caches.delete(swCache) : Promise.resolve(); }
+  function revalidate() {
+    if (!navigator.serviceWorker) return;
+    var copy = !!navigator.serviceWorker.controller; // otherwise the page came from the network
+    navigator.serviceWorker.register('/sw.js').catch(function () { });
+    if (!copy) return;
+    api('GET', '/api/me').then(function (j) {
+      var id = function (b) { return b.user ? b.user.id : ''; };
+      if (id(j) !== id(boot)) return forgetPages().then(function () { location.reload(); });
+      boot.csrf = j.csrf;
+      if (boot.user && location.pathname === '/') load(); // redraws only what changed
+    }, function () { });
+  }
   function ago(t) {
     var s = Date.now() / 1000 - t;
     if (s < 60) return 'just now';
@@ -26,6 +43,7 @@
     return new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
+  revalidate();
   if (!boot.user) {
     main.appendChild(el('section', { class: 'empty' }, [
       el('h1', { text: 'Artifacts' }),
@@ -43,7 +61,11 @@
   var userBtn = el('button', { class: 'avatar', title: me.email, 'aria-label': 'Account: ' + me.email, popovertarget: 'usermenu' }, [face]);
   function signOut() {
     // leaves even if the request fails (an expired session answers 401): the server side is gone either way
-    var done = function (j) { try { indexedDB.deleteDatabase('vitrine'); } catch (e) { } location.href = (j && j.next) || '/?signed_out'; };
+    var done = function (j) {
+      try { indexedDB.deleteDatabase('vitrine'); } catch (e) { }
+      var leave = function () { location.href = (j && j.next) || '/?signed_out'; };
+      forgetPages().then(leave, leave);
+    };
     api('POST', '/auth/logout').then(done, function () { done(); });
   }
   var userMenu = el('div', { class: 'menu usermenu', id: 'usermenu', popover: '' }, [
@@ -175,21 +197,32 @@
     document.title = f ? f.name + ' · Artifacts' : 'Artifacts';
   }
 
-  var folders = [], last = 0, seq = 0;
+  var folders = [], last = 0, seq = 0, shown = '';
   function folderById(id) { return folders.filter(function (f) { return f.id === id; })[0]; }
   function listURL() {
     return '/api/artifacts?q=' + encodeURIComponent(st.q) + (st.owner ? '&owner=' + st.owner : '') + (st.kind ? '&kind=' + st.kind : '') +
       (st.folder ? '&folder=' + encodeURIComponent(st.folder) : isRoot() ? '&folder=none' : '') + (last ? '&before=' + last : '');
   }
+  // the page carries the first screen (boot.initial) for the view its URL names
+  function initial() {
+    var i = boot.initial;
+    boot.initial = null;
+    if (!i || ['q', 'owner', 'kind', 'folder'].some(function (k) { return i.key[k] !== st[k]; })) return null;
+    return Promise.resolve([{ folders: i.folders }, { items: i.items }]);
+  }
   function load() {
     var my = ++seq;
     last = 0;
     syncChrome();
-    Promise.all([api('GET', '/api/folders'), api('GET', listURL())]).then(function (r) {
+    (initial() || Promise.all([api('GET', '/api/folders'), api('GET', listURL())])).then(function (r) {
       if (my !== seq) return;
       folders = r[0].folders;
       if (st.folder && !folderById(st.folder)) { go(''); return; } // deleted, or not ours
       syncChrome();
+      // an unchanged view is left as it is: redrawing would reload every thumbnail
+      var now = JSON.stringify([st, r[0], r[1]]);
+      if (now === shown && list.querySelector('.cell, .empty')) return;
+      shown = now;
       list.textContent = '';
       showFolders();
       showItems(r[1].items);
