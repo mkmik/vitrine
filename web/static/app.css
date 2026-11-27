@@ -38,8 +38,6 @@ pre.code { background: var(--card); border: 1px solid var(--line); border-radius
 .bar .title { font-weight: 600; white-space: nowrap; min-width: 0; max-width: 40vw; border: 0; background: none; padding: 4px 6px 4px 8px; gap: 4px; }
 .bar .title span { overflow: hidden; text-overflow: ellipsis; }
 .bar .title svg { flex: none; color: var(--muted); }
-.bar .title:disabled { cursor: default; background: none; }
-.bar .title:disabled svg { display: none; }
 .bar .title-edit { font-weight: 600; width: min(320px, 45vw); padding: 3px 8px; }
 .menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 200px; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.14); }
 .menu-head { color: var(--muted); font-size: 13px; padding: 6px 10px 4px; }
@@ -49,8 +47,9 @@ button.avatar { border: 0; padding: 0; width: 28px; height: 28px; border-radius:
 button.avatar:hover { background: var(--hover); box-shadow: 0 0 0 2px var(--line); }
 button.avatar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button.avatar img { width: 100%; height: 100%; display: block; }
-.menu button { display: flex; width: 100%; border: 0; background: none; padding: 7px 10px; gap: 10px; border-radius: 8px; }
-.menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+.menu button, .menu a { display: flex; align-items: center; width: 100%; border: 0; background: none; padding: 7px 10px; gap: 10px; border-radius: 8px; color: var(--fg); }
+.menu button:hover, .menu button:focus-visible, .menu a:hover, .menu a:focus-visible { background: var(--hover); outline: none; }
+.menu a svg { flex: none; color: var(--muted); }
 .menu button[hidden] { display: none; }
 .bar .ver { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .bar .spacer { flex: 1; }
@@ -164,9 +163,14 @@ select.quiet:hover { background-color: var(--hover); }
 .consent { max-width: 460px; margin: 10vh auto; padding: 24px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
 .consent h1 { font-size: 20px; }
 @media (max-width: 640px) {
-  .toggle span, #copyBtn, .bar .ver { display: none; }
-  .bar .title { max-width: 45vw; }
-  .bar nav { gap: 10px; }
+  /* phones: source and bare page live in the title menu; auto-refresh stays on */
+  #autoWrap, #src, #raw, #copyBtn, .bar .ver, .bar .home b { display: none; }
+  .bar { gap: 4px; }
+  .bar .title { max-width: none; }
+  .bar nav { gap: 12px; }
+  .page code { overflow-wrap: anywhere; }
+  /* iOS zooms the page into any field under 16px */
+  input, select { font-size: 16px; }
 }
 body.rawpage { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; background: #fff; }
 body.rawpage iframe { display: block; border: 0; width: 100%; height: 100%; }

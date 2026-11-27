@@ -9,6 +9,7 @@ func guideShort(cfg *Config) string {
 	return `Quick rules for vitrine artifacts (call guide for details):
 - Documents (specs, plans, notes, reports): pass markdown instead of html; vitrine renders it (GFM, footnotes, mermaid). Everything below is for html pages.
 - One self-contained HTML file. Inline your CSS/JS; libraries only from: ` + strings.Join(cfg.CDNs, " ") + `. No other network (no fetch to APIs), no cookies, no localStorage for anything shared.
+- Mobile first: viewport meta, fluid layout, no sideways scroll, 44px tap targets, no hover-only controls, 16px inputs.
 - Iterate with edit (exact find-and-replace) or rewrite, passing base_version = the head you last saw. Open views reload by themselves.
 - Optional runtime, same API as Claude artifacts: const db = await claude.use("db") (also "room", "sample", "user"); each resolves null when unavailable, so render without it first. Declare what you use with create's capabilities or declare.`
 }
@@ -71,7 +72,10 @@ const guidePage = `# Page rules
 - Not available: alert/confirm/prompt (they return at once: build dialogs into the page), iframes/object/embed (removed when inserted), WebRTC, <link rel=preconnect|dns-prefetch|prefetch>.
 - Links: a plain <a href="https://..."> opens in a new tab when clicked; window.open(url) does the same from a click handler and returns null. The page itself cannot navigate to another site.
 - window.claude exists before your scripts run and carries only use(name). Render the full single-viewer page first, then light features up when use() resolves (null after ~10 s without a viewer, at once in raw view).
-- Make it responsive (it is often opened on a phone) and readable in light and dark (prefers-color-scheme).
+- Mobile first: it is often opened on a phone, about 360-430px wide. The frame is as wide as the screen; still start <head> with <meta name="viewport" content="width=device-width, initial-scale=1"> so a saved copy works too.
+  Fluid layout (flex/grid, max-width, %%, min()); no fixed widths over 320px; images and svg max-width:100%%; wide tables, code and charts in a box with overflow-x:auto, never a page that scrolls sideways.
+  Tap targets at least 44px; nothing only on hover (use click, show the control); inputs at font-size 16px or more (smaller makes iOS zoom in); full-height layouts use 100dvh, not 100vh.
+- Readable in light and dark (prefers-color-scheme).
 - A new version reloads the iframe: state that must survive lives in db, not in JS variables.`
 
 const guideDB = `# db — shared document store (declare {"db":{}}, usually with {"user":{}})
