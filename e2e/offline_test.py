@@ -79,7 +79,7 @@ with sync_playwright() as p:
     # sign-out clears the saved copies
     owner.goto(BASE + "/")
     owner.click("button.avatar")
-    owner.get_by_role("menuitem", name="Sign out").click()
+    owner.get_by_role("button", name="Sign out").click()
     time.sleep(1)
     dbs = owner.evaluate("indexedDB.databases().then(d => d.map(x => x.name))")
     check("vitrine" not in dbs, "sign-out deletes the saved snapshots")

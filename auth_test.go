@@ -67,3 +67,29 @@ func TestRequireSignInPublicGrant(t *testing.T) {
 		t.Fatalf("flag on, signed in: level %d", l)
 	}
 }
+
+// VITRINE_DISABLE_PUBLIC_SHARING: a public grant opens nothing, even for a
+// signed-in user, and sharing with the public is refused (revoking still works).
+func TestNoPublicSharing(t *testing.T) {
+	st, err := openStore(filepath.Join(t.TempDir(), "v.db"))
+	must(t, err)
+	defer st.close()
+	s, err := newServer(&Config{BaseURL: "https://x", Auth: "dev", Addr: "127.0.0.1:0", NoPublicSharing: true}, st)
+	must(t, err)
+	owner, _ := st.upsertUser("dev|o", "o@example.com", "O")
+	other, _ := st.upsertUser("dev|x", "x@example.com", "X")
+	a, _ := st.createArtifact(owner.ID, kindHTML, "t", "", "<p>hi</p>", nil, "x")
+	st.setGrant(a.ID, Grant{Audience: "public", Level: "view"}) // made before the switch
+	if l := st.accessFor(a, other).Level; l != lvNone {
+		t.Fatalf("old public grant still opens it: level %d", l)
+	}
+	if _, err := s.opShare(a, "public", "view", 0); err == nil {
+		t.Fatal("sharing with the public was allowed")
+	}
+	if _, err := s.opShare(a, "public", "none", 0); err != nil {
+		t.Fatalf("revoking the old public grant: %v", err)
+	}
+	if _, err := s.opShare(a, "users", "view", 0); err != nil || st.accessFor(a, other).Level != lvView {
+		t.Fatalf("users grant: %v", err)
+	}
+}

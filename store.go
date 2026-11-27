@@ -27,6 +27,7 @@ var (
 type Store struct {
 	db            *DB
 	requireSignIn bool // "public" grants reach only signed-in users
+	noPublic      bool // "public" grants reach nobody (public sharing is off)
 }
 
 const sqlSchema = `

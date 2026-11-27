@@ -1,9 +1,13 @@
 package main
 
 import (
+	"compress/gzip"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +57,63 @@ func TestCachingAndCompression(t *testing.T) {
 	w = get("/")
 	if w.Header().Get("Content-Encoding") != "" || w.Header().Get("Speculation-Rules") == "" {
 		t.Fatalf("index (carries the CSRF token, must stay uncompressed): %v", w.Header())
+	}
+}
+
+// gzipMW leaves small replies (a save's JSON ack, a HEAD, a 304) as they are,
+// honours "gzip;q=0", and still compresses big text.
+func TestGzipSmallAndNegotiation(t *testing.T) {
+	big := strings.Repeat("walrus ", 400)
+	h := gzipMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/artifacts/small":
+			writeJSON(w, 200, map[string]int{"y": 1})
+		case "/api/artifacts/big":
+			writeJSON(w, 200, map[string]string{"s": big})
+		case "/api/artifacts/notmod":
+			w.WriteHeader(http.StatusNotModified)
+		}
+	}))
+	do := func(method, path, ae string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, nil)
+		r.Header.Set("Accept-Encoding", ae)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if w := do("POST", "/api/artifacts/small", "gzip"); w.Code != 200 || w.Header().Get("Content-Encoding") != "" || w.Body.String() != "{\"y\":1}\n" {
+		t.Fatalf("small reply: %d %v %q", w.Code, w.Header(), w.Body)
+	}
+	w := do("GET", "/api/artifacts/big", "deflate, GZip")
+	zr, err := gzip.NewReader(w.Body)
+	must(t, err)
+	b, _ := io.ReadAll(zr)
+	if w.Header().Get("Content-Encoding") != "gzip" || !strings.Contains(string(b), big) {
+		t.Fatalf("big reply not compressed: %v", w.Header())
+	}
+	if w := do("GET", "/api/artifacts/big", "gzip;q=0, identity"); w.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("gzip;q=0 ignored: %v", w.Header())
+	}
+	if w := do("GET", "/api/artifacts/notmod", "gzip"); w.Code != http.StatusNotModified || w.Body.Len() != 0 {
+		t.Fatalf("304: %d %q", w.Code, w.Body)
+	}
+
+	// HEAD of a static file keeps its real length
+	st, err := openStore(filepath.Join(t.TempDir(), "v.db"))
+	must(t, err)
+	defer st.close()
+	s, err := newServer(&Config{BaseURL: "https://x", Auth: "dev", Addr: "127.0.0.1:0"}, st)
+	must(t, err)
+	get := httptest.NewRecorder()
+	head := httptest.NewRecorder()
+	for _, c := range []struct {
+		m string
+		w *httptest.ResponseRecorder
+	}{{"GET", get}, {"HEAD", head}} {
+		r := httptest.NewRequest(c.m, "/static/app.js", nil)
+		s.routes().ServeHTTP(c.w, r)
+	}
+	if head.Header().Get("Content-Length") != fmt.Sprint(get.Body.Len()) || head.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("HEAD: %v, GET body %d", head.Header(), get.Body.Len())
 	}
 }

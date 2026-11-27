@@ -110,7 +110,9 @@ func (s *Server) securityHeaders(w http.ResponseWriter) {
 // page serves one of the app's HTML pages with boot data.
 func (s *Server) page(name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.RequireSignIn && s.userOf(r) == nil {
+		// after sign-out the index shows "Sign in" instead: going straight to the
+		// IdP would sign the user back in from its own session
+		if s.cfg.RequireSignIn && s.userOf(r) == nil && !(name == "index.html" && r.URL.Query().Has("signed_out")) {
 			http.Redirect(w, r, s.loginURL(r.URL.RequestURI()), http.StatusFound)
 			return
 		}
@@ -163,7 +165,7 @@ func (s *Server) renderPage(w http.ResponseWriter, name string, boot map[string]
 
 func (s *Server) bootFor(r *http.Request, extra map[string]any) map[string]any {
 	b := map[string]any{"base": s.cfg.BaseURL, "auth": s.cfg.Auth, "mcp_url": s.cfg.BaseURL + "/mcp", "title": "Artifacts", "version": version,
-		"sample": s.cfg.LLMURL != "", "org": s.cfg.OrgName}
+		"sample": s.cfg.LLMURL != "", "org": s.cfg.OrgName, "require_signin": s.cfg.RequireSignIn, "public_sharing": !s.cfg.NoPublicSharing}
 	if ss := s.sessionOf(r); ss != nil {
 		b["user"] = map[string]string{"id": ss.User.ID, "email": ss.User.Email, "name": ss.User.DisplayName(), "avatar": gravatarURL(ss.User.Email, ss.User.DisplayName())}
 		b["csrf"] = ss.CSRF
@@ -296,9 +298,9 @@ func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
 	// each time (access is checked above): the list's thumbnails and a reload
 	// get a 304 and skip the body. bootID covers a new runtime or CSP.
 	sum := sha256.Sum256([]byte(fmt.Sprint(a.ID, shown, mode, y, a.Kind, a.Title)))
-	etag := `"` + bootID + "-" + hex.EncodeToString(sum[:12]) + `"`
+	etag := `W/"` + bootID + "-" + hex.EncodeToString(sum[:12]) + `"`
 	w.Header().Set("ETag", etag)
-	if strings.Contains(r.Header.Get("If-None-Match"), etag) {
+	if inm := r.Header.Get("If-None-Match"); inm == "*" || strings.Contains(inm, etag[2:]) {
 		w.Header().Set("Cache-Control", "private, no-cache")
 		w.WriteHeader(http.StatusNotModified)
 		return
@@ -564,11 +566,20 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Revalidated on every use, so access is checked each time (a revoked share
+	// or a sign-out takes effect at once); an unchanged image costs a 304.
+	sum := sha256.Sum256(data)
+	etag := `"` + hex.EncodeToString(sum[:12]) + `"`
 	h := w.Header()
-	h.Set("Content-Type", mime)
+	h.Set("ETag", etag)
+	h.Set("Cache-Control", "private, no-cache")
 	h.Set("X-Content-Type-Options", "nosniff")
+	if inm := r.Header.Get("If-None-Match"); inm == "*" || strings.Contains(inm, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.Set("Content-Type", mime)
 	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
-	h.Set("Cache-Control", "private, max-age=31536000, immutable") // the URL carries ?v=<changed at>
 	w.Write(data)
 }
 

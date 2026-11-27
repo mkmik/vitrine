@@ -10,7 +10,12 @@
   }
   function api(method, path, body) {
     return fetch(path, { method: method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF': boot.csrf || '' }, body: body ? JSON.stringify(body) : undefined })
-      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) throw new Error(j.error || r.statusText); return j; }); });
+      .then(function (r) {
+        return r.json().then(function (j) {
+          if (!r.ok) throw new Error((j && j.error) || r.statusText || 'HTTP ' + r.status);
+          return j;
+        }, function () { throw new Error(r.ok ? 'the server sent an unreadable reply' : r.statusText || 'HTTP ' + r.status); });
+      });
   }
   function ago(t) {
     var s = Date.now() / 1000 - t;
@@ -35,20 +40,25 @@
   var me = boot.user, who = me.name && me.name !== me.email ? me.name : '';
   var face = el('img', { src: me.avatar, alt: '', width: '28', height: '28' });
   face.addEventListener('error', function () { face.replaceWith(el('span', { text: (who || me.email).charAt(0).toUpperCase() })); });
-  var userBtn = el('button', { class: 'avatar', title: me.email, 'aria-label': 'Account: ' + me.email, 'aria-haspopup': 'menu', 'aria-expanded': 'false', popovertarget: 'usermenu' }, [face]);
-  var userMenu = el('div', { class: 'menu usermenu', id: 'usermenu', popover: '', role: 'menu' }, [
+  var userBtn = el('button', { class: 'avatar', title: me.email, 'aria-label': 'Account: ' + me.email, popovertarget: 'usermenu' }, [face]);
+  function signOut() {
+    // leaves even if the request fails (an expired session answers 401): the server side is gone either way
+    var done = function (j) { try { indexedDB.deleteDatabase('vitrine'); } catch (e) { } location.href = (j && j.next) || '/?signed_out'; };
+    api('POST', '/auth/logout').then(done, function () { done(); });
+  }
+  var userMenu = el('div', { class: 'menu usermenu', id: 'usermenu', popover: '' }, [
     who ? el('div', { class: 'menu-name', text: who }) : null,
     el('div', { class: 'menu-head', text: me.email }),
     el('hr'),
-    el('button', { role: 'menuitem', onclick: function () { api('POST', '/auth/logout').then(function (j) { try { indexedDB.deleteDatabase('vitrine'); } catch (e) { } location.href = (j && j.next) || '/'; }); } }, [el('span', { text: 'Sign out' })])
+    el('button', { onclick: signOut }, [el('span', { text: 'Sign out' })])
   ]);
-  userMenu.addEventListener('toggle', function (e) {
-    var open = e.newState === 'open';
-    userBtn.setAttribute('aria-expanded', String(open));
-    if (!open) return;
+  // placed before it paints, right-aligned under the avatar
+  userMenu.addEventListener('beforetoggle', function (e) {
+    if (e.newState !== 'open') return;
     var r = userBtn.getBoundingClientRect();
     userMenu.style.top = r.bottom + 6 + 'px';
-    userMenu.style.left = Math.max(8, Math.min(r.right - userMenu.offsetWidth, innerWidth - userMenu.offsetWidth - 8)) + 'px';
+    userMenu.style.left = 'auto';
+    userMenu.style.right = Math.max(8, innerWidth - r.right) + 'px';
   });
   document.body.appendChild(userMenu);
   nav.appendChild(userBtn);
@@ -212,7 +222,7 @@
   function badge(it) {
     if (it.level !== 'owner') return el('span', { class: 'tag', text: 'from ' + it.owner_email.split('@')[0] + ' · ' + it.level });
     var gs = it.grants || [];
-    if (gs.some(function (g) { return g.audience === 'public'; })) return el('span', { class: 'tag pub', text: 'public' });
+    if (boot.public_sharing && gs.some(function (g) { return g.audience === 'public'; })) return el('span', { class: 'tag pub', text: 'public' });
     if (gs.length) return el('span', { class: 'tag', text: 'shared' });
     return el('span', { class: 'tag muted', text: 'private' });
   }
