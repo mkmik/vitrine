@@ -189,12 +189,12 @@
     $('thumbErr').textContent = 'Could not capture this view (' + (m.error || 'no answer') + ').';
   }
   // The list shows an image, not the live page, when there is one: a few seconds after a page
-  // renders, an editor's viewer takes one by itself, of the latest version, from the top. Pages
-  // with capabilities show this viewer's own data and name, so those keep the live thumbnail.
+  // renders, an editor's viewer takes one by itself, of the latest version, from the top. A page
+  // with capabilities is taken as this editor sees it (their data, their name).
   var autoSnap = 0; // the version being captured, 0 = none
   function wantAutoThumb() {
     return A.kind === 'html' && (LV[state.level] || 0) >= LV.edit && state.follow && state.shown === state.head &&
-      !(state.caps || []).length && !phone.matches && document.visibilityState === 'visible' &&
+      !phone.matches && document.visibilityState === 'visible' &&
       (thumb.img ? thumb.auto > 0 && thumb.auto < state.shown : !thumb.y);
   }
   frame.addEventListener('load', function () {

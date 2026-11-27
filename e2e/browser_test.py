@@ -149,7 +149,7 @@ with sync_playwright() as p:
     # new version keeps data
     tool("edit", id=a2["id"], base_version=1, edits=[{"old_text": "<pre id=out>", "new_text": "<p>v2</p><pre id=out>"}])
     check(wait_for(lambda: owner.frame_locator("#frame").locator("p").inner_text() == "v2" and rj(owner).get("votes") == "agent,friend,marko,x"), "new version reloads and keeps db data")
-    check(not any(i["id"] == a2["id"] and i.get("thumb_img") for i in lst()), "a page with capabilities keeps the live thumbnail")
+    check(wait_for(lambda: any(i["id"] == a2["id"] and i.get("thumb_img") for i in lst()), timeout=12), "a page with capabilities gets a thumbnail image too")
     # raw view: no runtime
     owner.goto(BASE + "/a/" + a2["id"] + "/raw")
     check(wait_for(lambda: '"have":"false,false,false"' in owner.frame_locator("#frame").locator("#out").inner_text()), "raw view runs the page, without the runtime")
