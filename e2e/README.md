@@ -11,6 +11,7 @@ runtime, markdown documents, the page hardening and sign-in.
 | `browser_test.py` | shell, live reload, db / room / user across users and tabs, `sample` with consent |
 | `offline_test.py` | saved copies first (`fromCache`), HTTP fallback, polling |
 | `md_test.py` | markdown documents: rendering, sanitizer, images, links, reading position |
+| `folders_test.py` | the artifacts list: tabs, type filter, search, list view, folders (drag and drop, menus, rename, delete) and that they stay personal, in three engines |
 | `harden_test.py` | WebRTC, child frames, self-navigation, popups and network hints, in three engines; fails against builds without the hardening |
 | `auth_test.py` | sign-in methods (oidc against `mock_idp.py`, proxy headers / secret / JWT, dev) and the configurations that must refuse to start |
 

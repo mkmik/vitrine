@@ -432,7 +432,7 @@ func (s *Server) callTool(p *Principal, ms *mcpSession, name string, args json.R
 				return toolError("invalid_argument", "query is required", nil)
 			}
 		}
-		items, err := s.st.listFor(p.User, q, lim, a.Before)
+		items, err := s.st.listFor(p.User, q, lim, a.Before, ListFilter{})
 		if err != nil {
 			return errResult(err)
 		}

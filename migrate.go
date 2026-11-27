@@ -9,7 +9,7 @@ import (
 )
 
 // copyTables are copied in this order; the search index is rebuilt instead.
-var copyTables = []string{"users", "sessions", "tokens", "oauth_clients", "oauth_codes", "login_states", "artifacts", "versions", "grants", "docs", "thumbs"}
+var copyTables = []string{"users", "sessions", "tokens", "oauth_clients", "oauth_codes", "login_states", "artifacts", "versions", "grants", "docs", "thumbs", "folders", "folder_items"}
 
 // cmdMigrateStore copies a whole store between backends, either way:
 //
