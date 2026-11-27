@@ -50,7 +50,7 @@ func (s *Store) accessFor(a *Artifact, u *User) Access {
 	best, pin := lvNone, 0
 	for _, g := range gs {
 		// with public sharing off, a public grant made earlier opens nothing
-		match := (g.Audience == "public" && !s.noPublic && (u != nil || !s.requireSignIn)) || (u != nil && (g.Audience == "users" || g.Audience == "email:"+u.Email))
+		match := (g.Audience == "public" && !s.noPublic && (u != nil || !s.requireSignIn)) || (u != nil && (g.Audience == "users" || g.Audience == "link" || g.Audience == "email:"+u.Email))
 		if !match {
 			continue
 		}

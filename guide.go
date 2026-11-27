@@ -58,7 +58,7 @@ Tools:
 
 Viewing: people open the link in a shell that runs the page in a sandboxed iframe and reloads it when a new version lands (or shows a "new version" badge if they turned auto-refresh off). /a/<id>/raw is the bare page (no runtime: every claude.use() resolves null there). /a/<id>/source is the stored text (add ?download=1 to save it).
 
-Sharing levels: view (sees the head or a pinned version), interact (also writes shared storage), edit (changes the HTML, sees history), owner. Grants go to a person (email), all signed-in users, or the public (view/interact only; a server can turn public sharing off). New artifacts are private.
+Sharing levels: view (sees the head or a pinned version), interact (also writes shared storage), edit (changes the HTML, sees history), owner. Grants go to a person (email), all signed-in users (listed for them, or only for those with the link), or the public (view/interact only; a server can turn public sharing off). New artifacts are private.
 
 Runtime: pages may call await claude.use("db" | "room" | "sample" | "user"), the same API shapes as Claude artifacts. Each resolves null when this view cannot run it (signed-out viewer, raw view, not declared). Declare capabilities with create(capabilities=...) or declare(). Topics: page, db, room, sample, user, patterns.`
 

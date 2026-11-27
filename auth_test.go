@@ -92,4 +92,15 @@ func TestNoPublicSharing(t *testing.T) {
 	if _, err := s.opShare(a, "users", "view", 0); err != nil || st.accessFor(a, other).Level != lvView {
 		t.Fatalf("users grant: %v", err)
 	}
+	// a link grant opens for anyone signed in, but stays out of their list
+	b, _ := st.createArtifact(owner.ID, kindHTML, "u", "", "<p>hi</p>", nil, "x")
+	if _, err := s.opShare(b, "link", "view", 0); err != nil || st.accessFor(b, other).Level != lvView || st.accessFor(b, nil).Level != lvNone {
+		t.Fatalf("link grant: %v", err)
+	}
+	items, _ := st.listFor(other, "", 0, 0, ListFilter{})
+	for _, it := range items {
+		if it.ID == b.ID {
+			t.Fatal("link-shared artifact is listed")
+		}
+	}
 }

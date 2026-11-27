@@ -11,7 +11,7 @@ VITRINE_ALLOW_SIGNIN=           # emails/@domains allowed to sign in; empty = an
 VITRINE_ALLOW_GROUPS=           # groups allowed to sign in (oidc claim or proxy header); empty = any
 VITRINE_CREATORS=you@example.com   # who may create artifacts; empty = anyone signed in
 VITRINE_REQUIRE_SIGNIN=          # true: every page needs a signed-in user; "public" links then open only after sign-in
-VITRINE_DISABLE_PUBLIC_SHARING=  # true: no "anyone with the link" sharing, only people and everyone who can sign in; public grants made earlier stop working
+VITRINE_DISABLE_PUBLIC_SHARING=  # true: no "anyone with the link" sharing, only people, everyone who can sign in, and everyone who can sign in and has the link; public grants made earlier stop working
 VITRINE_ORG_NAME=               # e.g. "Example Corp": the share dialog then says "Anyone at Example Corp" for everyone who can sign in
 VITRINE_TRUSTED_PROXIES=        # addresses/CIDRs of proxies in front, or * when the platform guarantees one (Cloud Run; * only covers rate limits: proxy sign-in then needs a secret or a signed JWT)
 VITRINE_LOGOUT_URL=             # where the browser goes after sign-out (the proxy's or IdP's sign-out page)
