@@ -15,6 +15,7 @@ VITRINE_DISABLE_PUBLIC_SHARING=  # true: no "anyone with the link" sharing, only
 VITRINE_ORG_NAME=               # e.g. "Example Corp": the share dialog then says "Anyone at Example Corp" for everyone who can sign in
 VITRINE_TRUSTED_PROXIES=        # addresses/CIDRs of proxies in front, or * when the platform guarantees one (Cloud Run; * only covers rate limits: proxy sign-in then needs a secret or a signed JWT)
 VITRINE_LOGOUT_URL=             # where the browser goes after sign-out (the proxy's or IdP's sign-out page)
+VITRINE_SESSION_TTL=720h        # how long a browser stays signed in (Go duration: 12h, 168h, ...)
 VITRINE_LLM_URL=                # Anthropic Messages endpoint for the page `sample` capability; empty = off
 VITRINE_LLM_HEADER=             # e.g. "x-api-key: ..." for api.anthropic.com
 VITRINE_MODEL_QUICK / _DEFAULT / _COMPLEX

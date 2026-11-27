@@ -60,6 +60,7 @@ type Config struct {
 	MaxDocs           int
 	SampleRPM         int
 	MetricsAddr       string // Prometheus /metrics listener; empty = off
+	SessionTTL        time.Duration
 }
 
 func env(k, def string) string {
@@ -90,6 +91,20 @@ func envBool(k string) bool {
 		log.Fatalf("%s=%q: use true or false", k, v)
 	}
 	return b
+}
+
+// envDuration reads a Go duration like "12h"; a bad or non-positive value
+// stops the server rather than fall back silently.
+func envDuration(k string, def time.Duration) time.Duration {
+	v := os.Getenv(k)
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		log.Fatalf("%s=%q: use a positive duration like 12h or 720h", k, v)
+	}
+	return d
 }
 
 func splitList(s string) []string {
@@ -147,6 +162,7 @@ func loadConfig() *Config {
 		MaxDocs:           envInt("VITRINE_MAX_DOCS", 25000),
 		SampleRPM:         envInt("VITRINE_SAMPLE_RPM", 30),
 		MetricsAddr:       env("VITRINE_METRICS_ADDR", ""),
+		SessionTTL:        envDuration("VITRINE_SESSION_TTL", 30*24*time.Hour),
 	}
 }
 

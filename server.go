@@ -41,6 +41,9 @@ func newServer(cfg *Config, st *Store) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.SessionTTL <= 0 {
+		cfg.SessionTTL = 30 * 24 * time.Hour
+	}
 	s := &Server{cfg: cfg, st: st, base: b, mcpSessions: map[string]*mcpSession{}, limiters: map[string]*bucket{}, sampleBusy: map[string]int{}}
 	st.requireSignIn, st.noPublic = cfg.RequireSignIn, cfg.NoPublicSharing
 	s.hub = newHub(s)
@@ -395,12 +398,12 @@ func (s *Server) apiSession(w http.ResponseWriter, r *http.Request) *Session {
 }
 
 func (s *Server) setSession(w http.ResponseWriter, u *User) error {
-	tok, _, err := s.st.createSession(u.ID, 30*24*time.Hour)
+	tok, _, err := s.st.createSession(u.ID, s.cfg.SessionTTL)
 	if err != nil {
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true,
-		Secure: s.base.Scheme == "https", SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 3600})
+		Secure: s.base.Scheme == "https", SameSite: http.SameSiteLaxMode, MaxAge: int(s.cfg.SessionTTL.Seconds())})
 	return nil
 }
 
