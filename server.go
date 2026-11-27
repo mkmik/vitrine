@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -73,6 +74,11 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(webFS, "web/static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", cacheStatic(http.FileServer(http.FS(static)))))
+	mux.HandleFunc("GET /speculationrules", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/speculationrules+json")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write([]byte(speculationRules))
+	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 
 	// pages
@@ -153,16 +159,105 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /oauth/authorize", s.handleAuthorizePost)
 	mux.HandleFunc("POST /oauth/token", s.handleToken)
 	mux.HandleFunc("POST /oauth/revoke", s.handleRevoke)
-	return s.logMW(mux)
+	return s.logMW(gzipMW(mux))
 }
+
+// speculationRules has the browser fetch an artifact's viewer while the
+// pointer rests on its link, so the click shows it at once.
+const speculationRules = `{"prefetch":[{"where":{"href_matches":"/a/*"},"eagerness":"moderate"}]}`
 
 func cacheStatic(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=300")
+		if r.URL.Query().Get("v") == assetVer { // the URL changes with the content
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=300")
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		h.ServeHTTP(w, r)
 	})
 }
+
+// gzipPath picks the responses worth compressing. The app's own pages and
+// /api/me are left out: they carry the CSRF token, and compressing a secret
+// next to text an attacker can choose leaks it (BREACH).
+func gzipPath(p string) bool {
+	return strings.HasPrefix(p, "/static/") || strings.HasPrefix(p, "/c/") || strings.HasPrefix(p, "/api/artifacts") ||
+		strings.HasPrefix(p, "/api/v1/") || p == "/mcp"
+}
+
+var gzipPool = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}
+
+func gzipMW(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !gzipPath(r.URL.Path) {
+			h.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Add("Vary", "Accept-Encoding")
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") || r.Header.Get("Range") != "" {
+			h.ServeHTTP(w, r)
+			return
+		}
+		g := &gzipWriter{ResponseWriter: w}
+		defer g.close()
+		h.ServeHTTP(g, r)
+	})
+}
+
+// gzipWriter compresses a 200 response with a text body; anything else passes through.
+type gzipWriter struct {
+	http.ResponseWriter
+	gz      *gzip.Writer
+	decided bool
+}
+
+func (g *gzipWriter) WriteHeader(code int) {
+	if !g.decided {
+		g.decided = true
+		h := g.Header()
+		ct := h.Get("Content-Type")
+		if code == http.StatusOK && h.Get("Content-Encoding") == "" && !strings.HasPrefix(ct, "text/event-stream") &&
+			(strings.HasPrefix(ct, "text/") || strings.Contains(ct, "json") || strings.Contains(ct, "javascript") || strings.HasPrefix(ct, "image/svg")) {
+			h.Del("Content-Length")
+			h.Set("Content-Encoding", "gzip")
+			g.gz = gzipPool.Get().(*gzip.Writer)
+			g.gz.Reset(g.ResponseWriter)
+		}
+	}
+	g.ResponseWriter.WriteHeader(code)
+}
+
+func (g *gzipWriter) Write(b []byte) (int, error) {
+	if !g.decided {
+		if g.Header().Get("Content-Type") == "" {
+			g.Header().Set("Content-Type", http.DetectContentType(b))
+		}
+		g.WriteHeader(http.StatusOK)
+	}
+	if g.gz != nil {
+		return g.gz.Write(b)
+	}
+	return g.ResponseWriter.Write(b)
+}
+
+func (g *gzipWriter) Flush() {
+	if g.gz != nil {
+		g.gz.Flush()
+	}
+	if f, ok := g.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (g *gzipWriter) close() {
+	if g.gz != nil {
+		g.gz.Close()
+		gzipPool.Put(g.gz)
+	}
+}
+
+func (g *gzipWriter) Unwrap() http.ResponseWriter { return g.ResponseWriter }
 
 type statusRecorder struct {
 	http.ResponseWriter
