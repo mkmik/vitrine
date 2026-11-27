@@ -18,24 +18,20 @@ import (
 	"unicode"
 )
 
-var (
-	headRE    = regexp.MustCompile(`(?i)<head(\s[^>]*)?>`)
-	htmlTagRE = regexp.MustCompile(`(?i)<html(\s[^>]*)?>`)
-	doctypeRE = regexp.MustCompile(`(?i)^\s*<!doctype[^>]*>`)
-)
+var doctypeRE = regexp.MustCompile(`(?i)^\s*<!doctype[^>]*>`)
 
+// injectRuntime puts the runtime first in the page, so the page's own markup
+// can't hide it: a <head> found by search could sit inside a comment, a
+// <script> string or a <textarea>, and the runtime would never run. Only a
+// leading doctype goes before it (keeping standards mode); a doctype ends at
+// its first '>', so nothing in it can open a comment.
 func injectRuntime(html, script string) string {
 	tag := "<script>" + script + "</script>"
-	if loc := headRE.FindStringIndex(html); loc != nil {
-		return html[:loc[1]] + tag + html[loc[1]:]
-	}
-	if loc := htmlTagRE.FindStringIndex(html); loc != nil {
-		return html[:loc[1]] + tag + html[loc[1]:]
-	}
+	n := 0
 	if loc := doctypeRE.FindStringIndex(html); loc != nil {
-		return html[:loc[1]] + tag + html[loc[1]:]
+		n = loc[1]
 	}
-	return tag + html
+	return html[:n] + tag + html[n:]
 }
 
 var runtimeSrc = sync.OnceValue(func() string {
