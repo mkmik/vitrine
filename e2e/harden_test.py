@@ -87,6 +87,8 @@ setTimeout(() => { try { top.location = 'http://127.0.0.1:8896/top'; } catch (e)
 </script></body></html>"""
 
 a_attack = tool("create", title="attack", html=ATTACK)["result"]["id"]
+# a fake <head> in a comment, so injecting after the first "<head>" would comment the hardening out
+a_hidden = tool("create", title="hidden", html=ATTACK.replace("<!doctype html>", "<!doctype html><!--<head>-->", 1))["result"]["id"]
 a_nav = tool("create", title="nav", html=NAV)["result"]["id"]
 a_click = tool("create", title="click", html=NAV.replace("<meta http-equiv", "<meta data-x").replace("setTimeout(", "void(") )["result"]["id"]
 
@@ -100,12 +102,12 @@ with sync_playwright() as p:
         if not wait_for(lambda: "vit_s" in [c["name"] for c in ctx.cookies()], 3):
             print("SKIP", engine, "(session cookie not kept over http)"); b.close(); continue
 
-        for view in ["", "/raw"]:
-            pg.goto(BASE + "/a/" + a_attack + view)
+        for a, view in [(a_attack, ""), (a_attack, "/raw"), (a_hidden, "")]:
+            pg.goto(BASE + "/a/" + a + view)
             fr = pg.frame_locator("#frame")
             out = wait_for(lambda: (lambda t: t if t.startswith("{") else None)(fr.locator("#out").inner_text()), 12)
             r = json.loads(out) if out else {}
-            tag = engine + (view or " shell")
+            tag = engine + (view or " shell") + (" hidden-head" if a == a_hidden else "")
             check(r.get("mainRTC") == "undefined/undefined/undefined/undefined", tag + ": WebRTC gone from the page: " + str(r.get("mainRTC")))
             check(r.get("leaks") == [], tag + ": no child frame ran WebRTC: " + str(r.get("leaks")))
             check(r.get("frames") == 0 and r.get("frameEls") == 0, tag + ": no frames left (%s windows, %s elements)" % (r.get("frames"), r.get("frameEls")))
