@@ -108,6 +108,7 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, id Identity
 		http.Error(w, "session: "+err.Error(), 500)
 		return
 	}
+	signIns.Inc()
 	log.Printf("login %s (%s) via %s", u.Email, u.ID, s.cfg.Auth)
 	http.Redirect(w, r, next, http.StatusFound)
 }

@@ -339,6 +339,7 @@ func (s *Server) logMW(h http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, code: 200}
 		h.ServeHTTP(rec, r)
+		observeHTTP(r, rec.code, time.Since(start))
 		if r.URL.Path != "/healthz" && !strings.HasPrefix(r.URL.Path, "/static/") {
 			log.Printf("%s %s %d %s", r.Method, r.URL.Path, rec.code, time.Since(start).Round(time.Millisecond))
 		}

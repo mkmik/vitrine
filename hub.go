@@ -434,6 +434,7 @@ func (h *Hub) add(c *wsConn) {
 		h.conns[c.aid] = map[*wsConn]struct{}{}
 	}
 	h.conns[c.aid][c] = struct{}{}
+	liveViewers.Inc()
 }
 
 func (h *Hub) remove(c *wsConn) {
@@ -452,6 +453,7 @@ func (h *Hub) remove(c *wsConn) {
 		delete(h.conns, c.aid)
 	}
 	h.mu.Unlock()
+	liveViewers.Dec()
 }
 
 func (h *Hub) connsOf(aid string) []*wsConn {

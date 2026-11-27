@@ -18,7 +18,25 @@ VITRINE_LOGOUT_URL=             # where the browser goes after sign-out (the pro
 VITRINE_LLM_URL=                # Anthropic Messages endpoint for the page `sample` capability; empty = off
 VITRINE_LLM_HEADER=             # e.g. "x-api-key: ..." for api.anthropic.com
 VITRINE_MODEL_QUICK / _DEFAULT / _COMPLEX
+VITRINE_METRICS_ADDR=           # e.g. 0.0.0.0:9090: Prometheus metrics at /metrics on this separate address; empty = off
 ```
+
+## Metrics
+
+With `VITRINE_METRICS_ADDR` set, vitrine serves Prometheus metrics on that
+address (keep it off the public ingress). Labels never hold user names,
+emails or artifact ids.
+
+| metric | what |
+| --- | --- |
+| `vitrine_http_requests_total{route,code}` | requests by route pattern (`GET /a/{id}`) and status |
+| `vitrine_http_request_duration_seconds{route}` | request latency |
+| `vitrine_tool_calls_total{tool,via,result}` | agent tool calls; `via` is `mcp` or `api` |
+| `vitrine_live_connections` | open viewer WebSockets |
+| `vitrine_sign_ins_total` | browser sign-ins |
+| `vitrine_artifacts{kind}` | artifacts stored, `html` or `markdown` |
+| `vitrine_users` | users known |
+| `vitrine_active_owners{window}` | people whose artifacts changed in the last `1d`, `7d`, `30d` |
 
 ## Sign-in
 

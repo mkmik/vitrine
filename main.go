@@ -59,6 +59,7 @@ type Config struct {
 	MaxDocBytes       int
 	MaxDocs           int
 	SampleRPM         int
+	MetricsAddr       string // Prometheus /metrics listener; empty = off
 }
 
 func env(k, def string) string {
@@ -145,6 +146,7 @@ func loadConfig() *Config {
 		MaxDocBytes:       envInt("VITRINE_MAX_DOC_BYTES", 256<<10),
 		MaxDocs:           envInt("VITRINE_MAX_DOCS", 25000),
 		SampleRPM:         envInt("VITRINE_SAMPLE_RPM", 30),
+		MetricsAddr:       env("VITRINE_METRICS_ADDR", ""),
 	}
 }
 
@@ -183,6 +185,9 @@ func main() {
 	}
 	hs := &http.Server{Addr: cfg.Addr, Handler: srv.routes(), ReadHeaderTimeout: 15 * time.Second}
 	go srv.gcLoop()
+	if cfg.MetricsAddr != "" {
+		go serveMetrics(cfg.MetricsAddr, st)
+	}
 	go func() {
 		log.Printf("vitrine %s listening on %s (base %s, sign-in: %s)", version, cfg.Addr, cfg.BaseURL, srv.auth.describe())
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {

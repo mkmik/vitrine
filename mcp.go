@@ -318,7 +318,8 @@ type toolArgs struct {
 	Confirm      string          `json:"confirm"`
 }
 
-func (s *Server) callTool(p *Principal, ms *mcpSession, name string, args json.RawMessage) *toolResult {
+func (s *Server) callTool(p *Principal, ms *mcpSession, name string, args json.RawMessage) (res *toolResult) {
+	defer func() { countToolCall(name, ms != nil, res) }()
 	var a toolArgs
 	if len(args) > 0 && string(args) != "null" {
 		if err := json.Unmarshal(args, &a); err != nil {
