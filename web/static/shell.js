@@ -37,7 +37,6 @@
     $('renameBtn').hidden = lv < LV.edit;
     $('dupBtn').hidden = !boot.can_create;
     $('thumbBtn').hidden = lv < LV.edit;
-    $('title').disabled = $('renameBtn').hidden && $('dupBtn').hidden;
     $('edited').textContent = state.updated ? 'Edited ' + fmtTime(state.updated) : '';
     var label = 'v' + state.shown;
     if (state.pinned) label += ' · pinned';
@@ -51,6 +50,8 @@
     $('raw').href = '/a/' + A.id + '/raw' + (state.follow ? '' : '/v/' + state.shown);
     $('src').href = '/a/' + A.id + '/source' + (state.follow ? '' : '/v/' + state.shown);
     $('src').title = A.kind === 'markdown' ? 'Markdown source' : 'Page source';
+    $('rawItem').href = $('raw').href;
+    $('srcItem').href = $('src').href;
     var b = $('badge');
     if (state.pendingHead && state.follow) { b.hidden = false; b.textContent = 'New version v' + state.pendingHead + ' — refresh'; }
     else if (!state.follow && !state.pinned && state.head > state.shown && lv >= LV.edit) { b.hidden = false; b.textContent = 'Latest is v' + state.head; }
@@ -106,6 +107,7 @@
   });
   // clicks inside the artifact frame never reach this document; close on focus loss instead
   window.addEventListener('blur', function () { if (menu.matches(':popover-open')) menu.hidePopover(); });
+  menu.addEventListener('click', function (e) { if (e.target.closest('a')) menu.hidePopover(); });
   $('renameBtn').addEventListener('click', function () {
     menu.hidePopover();
     titleEdit.value = state.title;
