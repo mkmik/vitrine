@@ -31,7 +31,27 @@
   }
   nav.appendChild(el('a', { href: '/', text: 'Artifacts' }));
   nav.appendChild(el('a', { href: '/settings', text: 'Connect agents' }));
-  nav.appendChild(el('button', { class: 'link', text: 'Sign out', title: boot.user.email, onclick: function () { api('POST', '/auth/logout').then(function (j) { try { indexedDB.deleteDatabase('vitrine'); } catch (e) { } location.href = (j && j.next) || '/'; }); } }));
+  // the signed-in user: an avatar that opens a menu with who they are and "Sign out"
+  var me = boot.user, who = me.name && me.name !== me.email ? me.name : '';
+  var face = el('img', { src: me.avatar, alt: '', width: '28', height: '28' });
+  face.addEventListener('error', function () { face.replaceWith(el('span', { text: (who || me.email).charAt(0).toUpperCase() })); });
+  var userBtn = el('button', { class: 'avatar', title: me.email, 'aria-label': 'Account: ' + me.email, 'aria-haspopup': 'menu', 'aria-expanded': 'false', popovertarget: 'usermenu' }, [face]);
+  var userMenu = el('div', { class: 'menu usermenu', id: 'usermenu', popover: '', role: 'menu' }, [
+    who ? el('div', { class: 'menu-name', text: who }) : null,
+    el('div', { class: 'menu-head', text: me.email }),
+    el('hr'),
+    el('button', { role: 'menuitem', onclick: function () { api('POST', '/auth/logout').then(function (j) { try { indexedDB.deleteDatabase('vitrine'); } catch (e) { } location.href = (j && j.next) || '/'; }); } }, [el('span', { text: 'Sign out' })])
+  ]);
+  userMenu.addEventListener('toggle', function (e) {
+    var open = e.newState === 'open';
+    userBtn.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    var r = userBtn.getBoundingClientRect();
+    userMenu.style.top = r.bottom + 6 + 'px';
+    userMenu.style.left = Math.max(8, Math.min(r.right - userMenu.offsetWidth, innerWidth - userMenu.offsetWidth - 8)) + 'px';
+  });
+  document.body.appendChild(userMenu);
+  nav.appendChild(userBtn);
 
   if (location.pathname === '/settings') return settings();
 

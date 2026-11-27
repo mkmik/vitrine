@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"golang.org/x/oauth2"
@@ -41,5 +42,28 @@ func TestOIDCPublicClientExchange(t *testing.T) {
 	}
 	if got.PostForm.Get("client_id") != "pub" || got.PostForm.Get("code_verifier") != "ver" || got.PostForm.Has("client_secret") {
 		t.Errorf("form = %v", got.PostForm)
+	}
+}
+
+// VITRINE_REQUIRE_SIGNIN: a "public" link still opens for anyone signed in,
+// but no longer for an anonymous visitor.
+func TestRequireSignInPublicGrant(t *testing.T) {
+	st, err := openStore(filepath.Join(t.TempDir(), "v.db"))
+	must(t, err)
+	defer st.close()
+	owner, _ := st.upsertUser("dev|o", "o@example.com", "O")
+	other, _ := st.upsertUser("dev|x", "x@example.com", "X")
+	a, _ := st.createArtifact(owner.ID, kindHTML, "t", "", "<p>hi</p>", nil, "x")
+	st.setGrant(a.ID, Grant{Audience: "public", Level: "view"})
+
+	if l := st.accessFor(a, nil).Level; l != lvView {
+		t.Fatalf("flag off, anonymous: level %d", l)
+	}
+	st.requireSignIn = true
+	if l := st.accessFor(a, nil).Level; l != lvNone {
+		t.Fatalf("flag on, anonymous: level %d", l)
+	}
+	if l := st.accessFor(a, other).Level; l != lvView {
+		t.Fatalf("flag on, signed in: level %d", l)
 	}
 }
