@@ -178,6 +178,14 @@ func TestIndexFirstScreen(t *testing.T) {
 	if l := w.Header().Get("Link"); !strings.Contains(l, "/a/"+top.ID+"/thumb?v=") || !strings.Contains(l, "rel=preload") {
 		t.Fatalf("thumbnail preload: %q", l)
 	}
+	// the versioned image is kept by the browser, so the list shows it without a round trip
+	r := httptest.NewRequest("GET", "/a/"+top.ID+"/thumb?v=1", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if cc := w.Header().Get("Cache-Control"); w.Code != 200 || !strings.Contains(cc, "immutable") {
+		t.Fatalf("thumb: %d %q", w.Code, cc)
+	}
 	b, _ = boot("/?folder=" + f.ID)
 	if got := titles(b); len(got) != 1 || got[0] != "in folder" {
 		t.Fatalf("folder lists %v", got)
@@ -189,7 +197,7 @@ func TestIndexFirstScreen(t *testing.T) {
 		t.Fatal("settings page carries the list")
 	}
 
-	r := httptest.NewRequest("GET", "/sw.js", nil)
+	r = httptest.NewRequest("GET", "/sw.js", nil)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-cache" || !strings.Contains(w.Body.String(), "vitrine-pages") {

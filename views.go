@@ -625,13 +625,19 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Revalidated on every use, so access is checked each time (a revoked share
-	// or a sign-out takes effect at once); an unchanged image costs a 304.
+	// Links carry ?v=<when the image changed>, so a new image is a new URL and
+	// the browser keeps this one: the list shows it without a round trip.
+	// A revoked share or a sign-out leaves the copy this browser already saw.
+	// ponytail: two saves in one second share a v; key on a content hash if that bites.
 	sum := sha256.Sum256(data)
 	etag := `"` + hex.EncodeToString(sum[:12]) + `"`
 	h := w.Header()
 	h.Set("ETag", etag)
-	h.Set("Cache-Control", "private, no-cache")
+	if r.URL.Query().Has("v") {
+		h.Set("Cache-Control", "private, max-age=31536000, immutable")
+	} else {
+		h.Set("Cache-Control", "private, no-cache")
+	}
 	h.Set("X-Content-Type-Options", "nosniff")
 	if inm := r.Header.Get("If-None-Match"); inm == "*" || strings.Contains(inm, etag) {
 		w.WriteHeader(http.StatusNotModified)
