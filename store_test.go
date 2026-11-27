@@ -224,7 +224,7 @@ func TestArtifactsAndVersions(t *testing.T) {
 			t.Fatal(e)
 		}
 		must(t, st.setThumb(a.ID, 640, "", nil))
-		if y, img := st.thumbMeta(a.ID); y != 640 || img != 0 {
+		if y, img, _ := st.thumbMeta(a.ID); y != 640 || img != 0 {
 			t.Fatalf("thumb scroll: %d %d", y, img)
 		}
 		png := []byte("\x89PNG\r\n\x1a\n\x00rest")
@@ -659,4 +659,24 @@ func TestMigrateStoreRoundTrip(t *testing.T) {
 		}
 	}
 	_ = m
+}
+
+func TestAutoThumb(t *testing.T) {
+	each(t, func(t *testing.T, st *Store) {
+		u, _ := st.upsertUser("dev|a", "a@example.com", "")
+		a, err := st.createArtifact(u.ID, kindHTML, "t", "", "<p>x</p>", nil, "agent")
+		must(t, err)
+		img := func() string { _, d, _ := st.thumbImage(a.ID); return string(d) }
+		must(t, st.setAutoThumb(a.ID, 2, "image/webp", []byte("v2")))
+		must(t, st.setAutoThumb(a.ID, 1, "image/webp", []byte("v1")))
+		if _, i, auto := st.thumbMeta(a.ID); i == 0 || auto != 2 || img() != "v2" {
+			t.Fatalf("auto thumb: %d %d %q", i, auto, img())
+		}
+		must(t, st.setAutoThumb(a.ID, 3, "image/webp", []byte("v3")))
+		must(t, st.setThumb(a.ID, 0, "image/png", []byte("mine")))
+		must(t, st.setAutoThumb(a.ID, 4, "image/webp", []byte("v4")))
+		if _, _, auto := st.thumbMeta(a.ID); auto != 0 || img() != "mine" {
+			t.Fatalf("an automatic image replaced a chosen one: %d %q", auto, img())
+		}
+	})
 }

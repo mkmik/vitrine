@@ -132,7 +132,8 @@ CREATE TABLE IF NOT EXISTS thumbs (
   y INTEGER NOT NULL DEFAULT 0,
   mime TEXT NOT NULL DEFAULT '',
   data BLOB NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  auto INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS folders (
   id TEXT PRIMARY KEY,
@@ -199,6 +200,14 @@ func migrate(db *sql.DB) error {
 	}
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE artifacts ADD COLUMN kind TEXT NOT NULL DEFAULT 'html'`); err != nil {
+			return err
+		}
+	}
+	if has, err = hasColumn(db, "thumbs", "auto"); err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE thumbs ADD COLUMN auto INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return err
 		}
 	}
@@ -882,21 +891,34 @@ func (s *Store) folders(u *User) ([]Folder, error) {
 }
 
 // ---- thumbnails ----
-// A thumbnail is the page itself, scrolled to y, unless an image was uploaded.
+// A thumbnail is the page itself, scrolled to y, unless there is an image:
+// one a person chose (auto = 0), or one the viewer took by itself of version
+// auto. A person's choice is never replaced by an automatic one.
 
 func (s *Store) setThumb(id string, y int, mime string, data []byte) error {
 	if data == nil {
 		data = []byte{}
 	}
-	_, err := s.db.Exec(`INSERT INTO thumbs(artifact_id, y, mime, data, updated_at) VALUES(?, ?, ?, ?, ?)
-		ON CONFLICT(artifact_id) DO UPDATE SET y=excluded.y, mime=excluded.mime, data=excluded.data, updated_at=excluded.updated_at`,
+	_, err := s.db.Exec(`INSERT INTO thumbs(artifact_id, y, mime, data, updated_at, auto) VALUES(?, ?, ?, ?, ?, 0)
+		ON CONFLICT(artifact_id) DO UPDATE SET y=excluded.y, mime=excluded.mime, data=excluded.data, updated_at=excluded.updated_at, auto=0`,
 		id, y, mime, data, now())
 	return err
 }
 
-// thumbMeta returns the scroll offset and when the uploaded image changed (0: none).
-func (s *Store) thumbMeta(id string) (y int, img int64) {
-	s.db.QueryRow(`SELECT y, CASE WHEN mime <> '' THEN updated_at ELSE 0 END FROM thumbs WHERE artifact_id=?`, id).Scan(&y, &img)
+// setAutoThumb stores an automatic image of version ver, unless a person
+// chose the thumbnail or there is already one of ver or later.
+func (s *Store) setAutoThumb(id string, ver int, mime string, data []byte) error {
+	_, err := s.db.Exec(`INSERT INTO thumbs(artifact_id, y, mime, data, updated_at, auto) VALUES(?, 0, ?, ?, ?, ?)
+		ON CONFLICT(artifact_id) DO UPDATE SET y=0, mime=excluded.mime, data=excluded.data, updated_at=excluded.updated_at, auto=excluded.auto
+		WHERE thumbs.auto > 0 AND thumbs.auto < excluded.auto`,
+		id, mime, data, now(), ver)
+	return err
+}
+
+// thumbMeta returns the scroll offset, when the image changed (0: none),
+// and the version an automatic image shows (0: a person chose it, or none).
+func (s *Store) thumbMeta(id string) (y int, img int64, auto int) {
+	s.db.QueryRow(`SELECT y, CASE WHEN mime <> '' THEN updated_at ELSE 0 END, auto FROM thumbs WHERE artifact_id=?`, id).Scan(&y, &img, &auto)
 	return
 }
 

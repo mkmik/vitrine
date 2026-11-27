@@ -53,6 +53,13 @@ func TestCachingAndCompression(t *testing.T) {
 	if w := get("/c/"+a.ID+"/0", "If-None-Match", etag); w.Code != 200 {
 		t.Fatalf("another mode reused the etag: %d", w.Code)
 	}
+	// thumbnails get the hardening but not the viewer's runtime
+	r := httptest.NewRequest("GET", frame, nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if b := w.Body.String(); !strings.Contains(b, "page hardening") || strings.Contains(b, "makeDB") || len(b) > 12000 {
+		t.Fatalf("raw frame carries the full runtime (%d bytes)", len(b))
+	}
 
 	w = get("/")
 	if w.Header().Get("Content-Encoding") != "" || w.Header().Get("Speculation-Rules") == "" {

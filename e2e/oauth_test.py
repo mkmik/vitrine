@@ -66,7 +66,7 @@ check(boot["artifact"]["shown"] == 2 and boot["artifact"]["level"] == "view" and
 code, h, body = req(anon, BASE + "/c/" + AID + "/2")
 csp = h["Content-Security-Policy"]
 check(code == 200 and csp.startswith("sandbox allow-scripts") and "frame-ancestors 'self'" in csp and "window.__vitrine_cfg" in body and "two" in body, "frame content with sandbox CSP + runtime")
-check(body.index("<script>window.__vitrine_cfg") > body.index("<head>"), "runtime injected after <head>")
+check(body.index("<script>window.__vitrine_cfg") < body.index("<head>"), "runtime injected first, before the page's own markup")
 code, h, body = req(anon, BASE + "/c/" + AID + "/4")
 check(code == 404, "anon cannot load head v4")
 code, h, body = req(anon, BASE + "/a/" + AID + "/raw")

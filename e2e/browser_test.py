@@ -115,6 +115,9 @@ with sync_playwright() as p:
     check(True, "duplicate opens the copy")
     check(wait_for(lambda: owner.locator("#titleText").inner_text() == "Copy of Renamed live"), "copy is titled 'Copy of ...'")
     check(wait_for(lambda: fr(owner).locator("#h").inner_text() == "version three"), "copy has the latest content")
+    cid = owner.url.split("/a/")[1]
+    lst = lambda: owner.evaluate("fetch('/api/artifacts').then(r => r.json())")["items"]
+    check(wait_for(lambda: any(i["id"] == cid and i.get("thumb_img") for i in lst()), timeout=12), "the viewer saves a thumbnail image by itself")
 
     # --- db / room / user across two users ---
     owner.goto(BASE + "/a/" + a2["id"])
@@ -146,6 +149,7 @@ with sync_playwright() as p:
     # new version keeps data
     tool("edit", id=a2["id"], base_version=1, edits=[{"old_text": "<pre id=out>", "new_text": "<p>v2</p><pre id=out>"}])
     check(wait_for(lambda: owner.frame_locator("#frame").locator("p").inner_text() == "v2" and rj(owner).get("votes") == "agent,friend,marko,x"), "new version reloads and keeps db data")
+    check(not any(i["id"] == a2["id"] and i.get("thumb_img") for i in lst()), "a page with capabilities keeps the live thumbnail")
     # raw view: no runtime
     owner.goto(BASE + "/a/" + a2["id"] + "/raw")
     check(wait_for(lambda: '"have":"false,false,false"' in owner.frame_locator("#frame").locator("#out").inner_text()), "raw view runs the page, without the runtime")

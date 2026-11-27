@@ -248,6 +248,8 @@ CREATE TABLE folder_items (
 CREATE INDEX folder_items_folder ON folder_items(folder_id);
 CREATE INDEX folder_items_artifact ON folder_items(artifact_id);
 `,
+	// 4: thumbnails the viewer takes by itself
+	`ALTER TABLE thumbs ADD COLUMN auto INTEGER NOT NULL DEFAULT 0;`,
 }
 
 const pgLockKey = 0x76697472696e65 // "vitrine"
