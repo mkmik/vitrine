@@ -171,10 +171,17 @@ func newOIDCAuth(s *Server) (*oidcAuth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery for %s: %w", c.OIDCIssuer, err)
 	}
+	ep := p.Endpoint()
+	if c.OIDCSecret == "" {
+		// Public client: PKCE alone proves the caller, and client_id goes in
+		// the form body (RFC 6749 §2.3.1). Auto-detect would first try an
+		// empty Basic password, which some providers reject.
+		ep.AuthStyle = oauth2.AuthStyleInParams
+	}
 	return &oidcAuth{
 		s:        s,
 		verifier: p.Verifier(&oidc.Config{ClientID: c.OIDCClientID}),
-		oauth: &oauth2.Config{ClientID: c.OIDCClientID, ClientSecret: c.OIDCSecret, Endpoint: p.Endpoint(),
+		oauth: &oauth2.Config{ClientID: c.OIDCClientID, ClientSecret: c.OIDCSecret, Endpoint: ep,
 			RedirectURL: c.BaseURL + "/auth/callback", Scopes: strings.Fields(c.OIDCScopes)},
 	}, nil
 }

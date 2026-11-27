@@ -28,7 +28,7 @@ start with a configuration that would let anyone sign in as anyone.
 | `VITRINE_AUTH` | Use it for | Needs |
 |---|---|---|
 | `exedev` | an exe.dev VM | nothing: exe.dev's proxy sets `X-ExeDev-UserID`/`-Email` and strips them from clients. Only safe when the server is reachable solely through that proxy. |
-| `oidc` | any OpenID Connect provider: Google, Entra ID, Okta, Keycloak, Dex | `VITRINE_OIDC_ISSUER`, `VITRINE_OIDC_CLIENT_ID`, `VITRINE_OIDC_CLIENT_SECRET`; redirect URI `<base>/auth/callback`. Optional `VITRINE_OIDC_SCOPES`, `VITRINE_GROUPS_CLAIM` (default `groups`). |
+| `oidc` | any OpenID Connect provider: Google, Entra ID, Okta, Keycloak, Dex | `VITRINE_OIDC_ISSUER`, `VITRINE_OIDC_CLIENT_ID`; redirect URI `<base>/auth/callback`. `VITRINE_OIDC_CLIENT_SECRET` for a confidential client; leave it empty for a public client (PKCE only). Optional `VITRINE_OIDC_SCOPES`, `VITRINE_GROUPS_CLAIM` (default `groups`). |
 | `proxy` | an authenticating proxy in front: oauth2-proxy, Pomerium, Cloudflare Access, Teleport, an ingress with auth | either plain headers plus `VITRINE_TRUSTED_PROXIES` (real addresses, not `*`) and/or `VITRINE_PROXY_SECRET`, or a signed JWT header (below) |
 | `dev` | tests | refuses any non-loopback address |
 
