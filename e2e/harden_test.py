@@ -58,6 +58,18 @@ t('textAfter', () => { const x = document.createTextNode('x'); document.body.app
 t('moveBefore', () => { if (!document.body.moveBefore) return; const d = document.createElement('div'); d.appendChild(mk()); document.body.moveBefore(d, null); });
 t('object', () => { const o = document.createElement('object'); o.data = 'data:text/html,' + encodeURIComponent(C); document.body.appendChild(o); });
 t('embed', () => { const o = document.createElement('embed'); o.src = 'data:text/html,' + encodeURIComponent(C); document.body.appendChild(o); });
+// page code that runs in the middle of an insert must not find a frame window
+// (the sandbox makes it cross-origin today, but that is not the line we hold)
+const grabbed = [];
+const g = (n, w) => { if (w) grabbed.push(n); };
+customElements.define('x-grab', class extends HTMLElement { constructor() { super(); g('ceConstructor', window[0]); } connectedCallback() { g('ceConnected', window[0]); } });
+document.addEventListener('load', e => g('loadEvent', e.target.contentWindow), true);
+t('ceInnerHTML', () => { const d = document.createElement('div'); document.body.appendChild(d); d.innerHTML = IF() + '<x-grab></x-grab>'; });
+t('ceAppend', () => document.body.append(mk(), document.createElement('x-grab')));
+t('scriptAppend', () => { const s = document.createElement('script'); s.textContent = 'g("script", window[0])'; document.body.append(mk(), s); });
+t('prefixed', () => { const f = document.createElementNS('http://www.w3.org/1999/xhtml', 'h:iframe'); f.srcdoc = C; document.body.appendChild(f); g('prefixed', window[0]); });
+t('tHead', () => { const doc = new DOMParser().parseFromString('<table><thead><tr><td>' + IF() + '</td></tr></thead></table>', 'text/html'); const tb = document.createElement('table'); document.body.appendChild(tb); tb.tHead = doc.querySelector('thead'); g('tHead', window[0]); });
+t('writeSplit', () => { document.write('<'); document.write(IF().slice(1)); g('writeSplit', window[0]); });
 t('hint', () => { const l = document.createElement('link'); l.rel = 'preconnect'; l.href = 'https://x.example'; document.head.appendChild(l); });
 t('hintLater', () => { const l = document.createElement('link'); l.href = 'https://y.example'; document.head.appendChild(l); l.rel = 'dns-prefetch'; });
 t('hintRelList', () => { const l = document.createElement('link'); l.href = 'https://z.example'; document.head.appendChild(l); l.relList.add('prefetch'); });
@@ -67,6 +79,7 @@ setTimeout(() => {
   res.frames = window.length;
   res.frameEls = document.querySelectorAll('iframe,object,embed').length;
   res.hintsLeft = document.querySelectorAll('link[rel]').length;
+  res.grabbed = grabbed;
   res.leaks = log.filter(x => x.startsWith('LEAK') || x.startsWith('childerr'));
   document.getElementById('out').textContent = JSON.stringify(res);
 }, 4000);
@@ -110,6 +123,7 @@ with sync_playwright() as p:
             tag = engine + (view or " shell") + (" hidden-head" if a == a_hidden else "")
             check(r.get("mainRTC") == "undefined/undefined/undefined/undefined", tag + ": WebRTC gone from the page: " + str(r.get("mainRTC")))
             check(r.get("leaks") == [], tag + ": no child frame ran WebRTC: " + str(r.get("leaks")))
+            check(r.get("grabbed") == [], tag + ": no page code found a frame mid-insert: " + str(r.get("grabbed")))
             check(r.get("frames") == 0 and r.get("frameEls") == 0, tag + ": no frames left (%s windows, %s elements)" % (r.get("frames"), r.get("frameEls")))
             check(r.get("hintsLeft") == 0, tag + ": network hints removed (%s left)" % r.get("hintsLeft"))
             check(r.get("openResult") == "null", tag + ": window.open returns null")

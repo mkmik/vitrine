@@ -57,7 +57,7 @@ func TestCachingAndCompression(t *testing.T) {
 	r := httptest.NewRequest("GET", frame, nil)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if b := w.Body.String(); !strings.Contains(b, "page hardening") || strings.Contains(b, "makeDB") || len(b) > 12000 {
+	if b := w.Body.String(); !strings.Contains(b, "page hardening") || strings.Contains(b, "makeDB") || len(b) > 20000 { // hardening ~11KB, full runtime ~42KB more
 		t.Fatalf("raw frame carries the full runtime (%d bytes)", len(b))
 	}
 

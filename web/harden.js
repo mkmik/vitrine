@@ -2,8 +2,11 @@
    The CSP blocks fetch, images and sockets to other hosts, but no browser lets
    a policy block WebRTC, and child frames run their own code. So:
    - WebRTC is removed from this realm;
-   - child frames (iframe, object, embed...) are removed as soon as they are
-     inserted, before they can load: they would bring WebRTC back;
+   - child frames (iframe, object, embed...) never reach the page: they would
+     bring WebRTC back. Page code can run in the middle of an insert (custom
+     element callbacks, inserted scripts, the load event a new frame fires
+     right away), so frames are taken out of what is inserted before the
+     insert, not swept after it;
    - network hints (dns-prefetch, preconnect, prefetch, prerender) are removed;
    - popups are off (sandbox), so links and window.open go through the shell,
      which opens http(s) URLs in a new tab on a real click only.
@@ -17,10 +20,10 @@
   var SRP = W.ShadowRoot ? ShadowRoot.prototype : null;
   var qsaE = EP.querySelectorAll, qsaD = DP.querySelectorAll, qsaF = FP.querySelectorAll;
   var removeEl = EP.remove, getAttr = EP.getAttribute, closest = EP.closest;
-  var tagName = getDesc(EP, 'tagName').get, nodeType = getDesc(NP, 'nodeType').get, parentNode = getDesc(NP, 'parentNode').get;
+  var localName = getDesc(EP, 'localName').get, nodeType = getDesc(NP, 'nodeType').get, parentNode = getDesc(NP, 'parentNode').get;
   var lenDesc = getDesc(W, 'length'), winLen = lenDesc && lenDesc.get;
   var framed = PARENT !== W;
-  var URL_ = W.URL, Node_ = W.Node;
+  var URL_ = W.URL, stopNow = Event.prototype.stopImmediatePropagation, evTarget = getDesc(Event.prototype, 'target').get;
   function re(r, s) { return apply(test, r, [s]); }
   function frames() { return winLen ? apply(winLen, W, []) : 0; }
 
@@ -30,14 +33,46 @@
   });
 
   // 2. child frames and network hints
-  var FRAME = /^(IFRAME|FRAME|FRAMESET|OBJECT|EMBED|PORTAL|FENCEDFRAME)$/;
+  // localName, not tagName: createElementNS(xhtml, 'x:iframe') is an iframe whose tagName is X:IFRAME
+  var NAMES = ['iframe', 'frame', 'frameset', 'object', 'embed', 'portal', 'fencedframe'];
+  var FRAME = new RegExp('^(' + NAMES.join('|') + ')$');
+  // an html start tag that would make a frame, and (document.write only) the
+  // start of one cut off at the end of a chunk, finished by the next write
+  var FRAMETAG = new RegExp('<(?=(' + NAMES.join('|') + ')([\\s/>]|$))', 'gi');
+  var prefixes = [];
+  NAMES.forEach(function (n) { for (var i = 1; i < n.length; i++) prefixes.push(n.slice(0, i)); });
+  var FRAMETAIL = new RegExp('<(?=(' + prefixes.join('|') + ')?$)', 'i');
   var HINT = /(^|\s)(dns-prefetch|preconnect|prefetch|prerender)(\s|$)/i;
   var SEL = 'iframe,frame,frameset,object,embed,portal,fencedframe,link[rel]';
   var shadows = [];
   function bad(el) {
-    var t = apply(tagName, el, []);
+    var t = apply(localName, el, []);
     if (re(FRAME, t)) return true;
-    return t === 'LINK' && re(HINT, apply(getAttr, el, ['rel']) || '');
+    return t === 'link' && re(HINT, apply(getAttr, el, ['rel']) || '');
+  }
+  function typeOf(n) { try { return apply(nodeType, n, []); } catch (e) { return 0; } }
+  // `<iframe` -> `&lt;iframe`: text where a tag was, the same value inside an attribute
+  function defang(s) { return s == null ? s : apply(strReplace, String(s), [FRAMETAG, '&lt;']); }
+  // false if n is itself a frame; otherwise strips frames out of it
+  function clean(n) {
+    var t = typeOf(n);
+    if (t === 1 && re(FRAME, apply(localName, n, []))) return false;
+    if (t === 1 || t === 11) sweepIn(n);
+    return true;
+  }
+  // the arguments to insert with: html defanged, frames dropped (only the one at
+  // `at`, or any when at < 0); null when the one node to insert is a frame
+  function prep(args, at, html) {
+    var out = [];
+    for (var i = 0; i < args.length; i++) {
+      var a = args[i];
+      if (at < 0 || i === at) {
+        if (html) a = defang(a);
+        else if (!clean(a)) { if (at < 0) continue; return null; }
+      }
+      apply(push, out, [a]);
+    }
+    return out;
   }
   function sweepIn(root) {
     if (!root) return;
@@ -64,7 +99,8 @@
     var out = [];
     for (var i = 0; i < args.length; i++) {
       var a = args[i];
-      if (a instanceof Node_) apply(push, out, [apply(nodeType, a, []) === 11 ? base : a]);
+      var t = typeOf(a);
+      if (t) apply(push, out, [t === 11 ? base : a]);
     }
     return out;
   }
@@ -76,50 +112,62 @@
     sibArgs: function (self, args) { return inserted(self, args, parentOf(self)); },
     first: function (self, args) { return inserted(self, [args[0]], self); },
   };
-  function wrapFn(proto, name, pick) {
+  // at: which argument is inserted (-1: all of them, null: none); html: it is markup
+  function wrapFn(proto, name, pick, at, html) {
     var d = proto && getDesc(proto, name);
     if (!d || typeof d.value !== 'function') return;
     var f = d.value;
     d.value = function () {
-      var targets = pick(this, arguments);
-      try { return apply(f, this, arguments); } finally { finish(targets); }
+      var args = at === null ? arguments : prep(arguments, at, html);
+      if (!args) return arguments[at];
+      var targets = pick(this, args);
+      try { return apply(f, this, args); } finally { finish(targets); }
     };
     defProp(proto, name, d);
   }
-  function wrapSet(proto, name, pick) {
+  function wrapSet(proto, name, pick, html) {
     var d = proto && getDesc(proto, name);
     if (!d || !d.set) return;
     var s = d.set;
     d.set = function (v) {
-      var targets = pick(this, [v]);
-      try { apply(s, this, [v]); } finally { finish(targets); }
+      var args = prep([v], 0, html);
+      if (!args) return;
+      var targets = pick(this, args);
+      try { apply(s, this, args); } finally { finish(targets); }
     };
     defProp(proto, name, d);
   }
-  wrapFn(NP, 'appendChild', T.first); wrapFn(NP, 'insertBefore', T.first); wrapFn(NP, 'replaceChild', T.first);
+  var N = false, H = true;
+  wrapFn(NP, 'appendChild', T.first, 0, N); wrapFn(NP, 'insertBefore', T.first, 0, N); wrapFn(NP, 'replaceChild', T.first, 0, N);
   [EP, DP, FP].forEach(function (p) {
-    ['append', 'prepend', 'replaceChildren'].forEach(function (n) { wrapFn(p, n, T.args); });
-    wrapFn(p, 'moveBefore', T.first);
+    ['append', 'prepend', 'replaceChildren'].forEach(function (n) { wrapFn(p, n, T.args, -1, N); });
+    wrapFn(p, 'moveBefore', T.first, 0, N);
   });
   [EP, CharacterData.prototype, DocumentType.prototype].forEach(function (p) {
-    ['after', 'before', 'replaceWith'].forEach(function (n) { wrapFn(p, n, T.sibArgs); });
+    ['after', 'before', 'replaceWith'].forEach(function (n) { wrapFn(p, n, T.sibArgs, -1, N); });
   });
-  wrapFn(EP, 'insertAdjacentElement', T.parent);
-  wrapFn(EP, 'insertAdjacentHTML', T.parent);
-  wrapFn(EP, 'setHTML', T.self); wrapFn(SRP, 'setHTML', T.self);
-  wrapSet(EP, 'innerHTML', T.self); wrapSet(EP, 'outerHTML', T.parent); wrapSet(SRP, 'innerHTML', T.self);
-  wrapFn(EP, 'setAttribute', T.self); wrapFn(EP, 'setAttributeNS', T.self); wrapFn(EP, 'toggleAttribute', T.self);
-  if (W.HTMLLinkElement) wrapSet(HTMLLinkElement.prototype, 'rel', T.self);
-  wrapFn(Range.prototype, 'insertNode', T.doc); wrapFn(Range.prototype, 'surroundContents', T.doc);
-  wrapFn(DP, 'execCommand', T.doc);
+  wrapFn(EP, 'insertAdjacentElement', T.parent, 1, N);
+  wrapFn(EP, 'insertAdjacentHTML', T.parent, 1, H);
+  wrapFn(EP, 'setHTML', T.self, 0, H); wrapFn(SRP, 'setHTML', T.self, 0, H);
+  wrapSet(EP, 'innerHTML', T.self, H); wrapSet(EP, 'outerHTML', T.parent, H); wrapSet(SRP, 'innerHTML', T.self, H);
+  wrapFn(EP, 'setAttribute', T.self, null); wrapFn(EP, 'setAttributeNS', T.self, null); wrapFn(EP, 'toggleAttribute', T.self, null);
+  if (W.HTMLLinkElement) wrapSet(HTMLLinkElement.prototype, 'rel', T.self, N);
+  wrapFn(Range.prototype, 'insertNode', T.doc, 0, N); wrapFn(Range.prototype, 'surroundContents', T.doc, 0, N);
+  wrapFn(DP, 'execCommand', T.doc, 2, H);
+  // the less obvious ways to insert a node
+  wrapSet(DP, 'body', T.doc, N);
+  if (W.HTMLTableElement) ['caption', 'tHead', 'tFoot'].forEach(function (n) { wrapSet(HTMLTableElement.prototype, n, T.self, N); });
+  if (W.HTMLSelectElement) wrapFn(HTMLSelectElement.prototype, 'add', T.self, 0, N);
+  if (W.HTMLOptionsCollection) wrapFn(HTMLOptionsCollection.prototype, 'add', T.doc, 0, N);
   // declarative shadow DOM would hide frames in closed shadow roots: parse without it
-  function noDSD(s) { return apply(strReplace, String(s), [/shadowroot(mode|delegatesfocus|clonable|serializable)/gi, 'data-x-$1']); }
+  // (and no frame tags, as for innerHTML)
+  function noDSD(s) { return defang(apply(strReplace, String(s), [/shadowroot(mode|delegatesfocus|clonable|serializable)/gi, 'data-x-$1'])); }
   ['write', 'writeln'].forEach(function (n) {
     var f = DP[n];
     DP[n] = function () {
       var a = [];
-      for (var i = 0; i < arguments.length; i++) apply(push, a, [noDSD(arguments[i])]);
-      try { return apply(f, this, a); } finally { sweepAll(); }
+      for (var i = 0; i < arguments.length; i++) apply(push, a, [apply(strReplace, noDSD(arguments[i]), [FRAMETAIL, '&lt;'])]);
+      try { return apply(f, this, a); } finally { sweepAll(); finish([this]); }
     };
   });
   [EP, SRP].forEach(function (p) {
@@ -135,6 +183,12 @@
   var OBS = { childList: true, subtree: true, attributes: true, attributeFilter: ['rel'] };
   var mo = new MutationObserver(sweepAll);
   mo.observe(D, OBS);
+  // a frame the parser inserts fires load right away in some engines, before
+  // the observer runs: take it out first, ahead of every other listener
+  D.addEventListener('load', function (e) {
+    var t = apply(evTarget, e, []);
+    if (t !== D && typeOf(t) === 1 && re(FRAME, apply(localName, t, []))) { apply(stopNow, e, []); apply(removeEl, t, []); }
+  }, true);
   // every shadow root, open or closed, is swept and watched too
   var attach = EP.attachShadow;
   EP.attachShadow = function () {
