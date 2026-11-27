@@ -114,7 +114,7 @@ func (s *Server) page(name string) http.HandlerFunc {
 			http.Redirect(w, r, s.loginURL(r.URL.RequestURI()), http.StatusFound)
 			return
 		}
-		if name == "index.html" {
+		if name == "index.html" && s.base.Scheme == "https" { // browsers only prefetch over https, WebKit logs errors otherwise
 			w.Header().Set("Speculation-Rules", `"/speculationrules"`)
 		}
 		s.renderPage(w, name, s.bootFor(r, nil))

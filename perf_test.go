@@ -11,7 +11,7 @@ func TestCachingAndCompression(t *testing.T) {
 	st, err := openStore(filepath.Join(t.TempDir(), "v.db"))
 	must(t, err)
 	defer st.close()
-	s, err := newServer(&Config{BaseURL: "http://x", Auth: "dev", Addr: "127.0.0.1:0"}, st)
+	s, err := newServer(&Config{BaseURL: "https://x", Auth: "dev", Addr: "127.0.0.1:0"}, st)
 	must(t, err)
 	h := s.routes()
 	owner, _ := st.upsertUser("dev|o", "o@example.com", "O")
