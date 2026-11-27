@@ -349,6 +349,8 @@
       setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 15000);
     };
   }
+  // an open socket keeps the page out of the back/forward cache; onclose reconnects when it is restored
+  addEventListener('pagehide', function (e) { if (e.persisted && ws) ws.close(); });
   function onHead(n) {
     if (n > state.head) state.head = n;
     if (state.follow && state.head > state.shown) {

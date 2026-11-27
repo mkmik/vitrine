@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 )
 
@@ -60,7 +62,7 @@ func contentHeaders(h http.Header, csp string) {
 	h.Set("X-DNS-Prefetch-Control", "off")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("Cache-Control", "private, no-store")
+	h.Set("Cache-Control", "private, no-cache") // revalidated by ETag, see handleFrame
 }
 
 func (s *Server) contentCSP(frameAncestors string) string {
@@ -112,6 +114,9 @@ func (s *Server) page(name string) http.HandlerFunc {
 			http.Redirect(w, r, s.loginURL(r.URL.RequestURI()), http.StatusFound)
 			return
 		}
+		if name == "index.html" {
+			w.Header().Set("Speculation-Rules", `"/speculationrules"`)
+		}
 		s.renderPage(w, name, s.bootFor(r, nil))
 	}
 }
@@ -119,6 +124,7 @@ func (s *Server) page(name string) http.HandlerFunc {
 var (
 	tmplMu   sync.Mutex
 	pageTmpl = map[string]*template.Template{}
+	bootID   = strconv.FormatInt(time.Now().UnixNano(), 36)
 	// assetVer changes whenever any file under web/static does, so pages never
 	// pair a new template with a browser-cached copy of the old script or styles.
 	assetVer = func() string {
@@ -280,17 +286,29 @@ func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	html, err := s.st.versionHTML(a.ID, shown)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
 	mode := "frame"
 	if r.URL.Query().Get("raw") == "1" {
 		mode = "raw"
 	}
 	y, _ := strconv.Atoi(r.URL.Query().Get("vy")) // documents read it themselves
-	s.serveContent(w, a, html, mode, "'self'", max(y, 0))
+	y = max(y, 0)
+	// A version never changes, so the browser keeps the frame and asks again
+	// each time (access is checked above): the list's thumbnails and a reload
+	// get a 304 and skip the body. bootID covers a new runtime or CSP.
+	sum := sha256.Sum256([]byte(fmt.Sprint(a.ID, shown, mode, y, a.Kind, a.Title)))
+	etag := `"` + bootID + "-" + hex.EncodeToString(sum[:12]) + `"`
+	w.Header().Set("ETag", etag)
+	if strings.Contains(r.Header.Get("If-None-Match"), etag) {
+		w.Header().Set("Cache-Control", "private, no-cache")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	html, err := s.st.versionHTML(a.ID, shown)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.serveContent(w, a, html, mode, "'self'", y)
 }
 
 func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
@@ -550,7 +568,7 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", mime)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
-	h.Set("Cache-Control", "private, max-age=86400") // the URL carries ?v=<changed at>
+	h.Set("Cache-Control", "private, max-age=31536000, immutable") // the URL carries ?v=<changed at>
 	w.Write(data)
 }
 
