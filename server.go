@@ -40,6 +40,7 @@ func newServer(cfg *Config, st *Store) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, st: st, base: b, mcpSessions: map[string]*mcpSession{}, limiters: map[string]*bucket{}, sampleBusy: map[string]int{}}
+	st.requireSignIn = cfg.RequireSignIn
 	s.hub = newHub(s)
 	if s.trustNets, s.trustAny, err = parsePrefixes(cfg.TrustedProxies); err != nil {
 		return nil, err

@@ -24,7 +24,10 @@ var (
 	errConflict = errors.New("conflict")
 )
 
-type Store struct{ db *DB }
+type Store struct {
+	db            *DB
+	requireSignIn bool // "public" grants reach only signed-in users
+}
 
 const sqlSchema = `
 CREATE TABLE IF NOT EXISTS users (

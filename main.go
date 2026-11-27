@@ -46,6 +46,7 @@ type Config struct {
 	AllowSignIn       []string // emails or @domains; empty = anyone the IdP signs in
 	Creators          []string // emails or @domains allowed to create; empty = any user
 	OrgName           string   // shown as "Anyone at <OrgName>" in the share dialog
+	RequireSignIn     bool     // every page needs a signed-in user, even links shared with "public"
 	LLMURL            string   // Anthropic-Messages-compatible base, e.g. https://llm.int.exe.xyz
 	LLMHeader         string   // optional "Name: value" added to LLM requests
 	ModelQuick        string
@@ -116,6 +117,7 @@ func loadConfig() *Config {
 		AllowSignIn:       splitList(env("VITRINE_ALLOW_SIGNIN", "")),
 		Creators:          splitList(env("VITRINE_CREATORS", "")),
 		OrgName:           env("VITRINE_ORG_NAME", ""),
+		RequireSignIn:     env("VITRINE_REQUIRE_SIGNIN", "") == "true",
 		LLMURL:            strings.TrimRight(env("VITRINE_LLM_URL", ""), "/"),
 		LLMHeader:         env("VITRINE_LLM_HEADER", ""),
 		ModelQuick:        env("VITRINE_MODEL_QUICK", "claude-haiku-5-5"),

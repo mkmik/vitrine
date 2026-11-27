@@ -8,10 +8,12 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 var (
@@ -91,7 +93,7 @@ func (s *Server) shellCSP() string {
 	// frame-src limits the artifact frame to /c/: browsers apply the parent's
 	// frame-src to the frame's own navigations too, so a page cannot take its
 	// frame to another site (leaking data in the URL) or to a vitrine page.
-	return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' " + ws +
+	return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://gravatar.com; connect-src 'self' " + ws +
 		"; frame-src " + s.cfg.BaseURL + "/c/; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
 }
 
@@ -105,7 +107,13 @@ func (s *Server) securityHeaders(w http.ResponseWriter) {
 
 // page serves one of the app's HTML pages with boot data.
 func (s *Server) page(name string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { s.renderPage(w, name, s.bootFor(r, nil)) }
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.RequireSignIn && s.userOf(r) == nil {
+			http.Redirect(w, r, s.loginURL(r.URL.RequestURI()), http.StatusFound)
+			return
+		}
+		s.renderPage(w, name, s.bootFor(r, nil))
+	}
 }
 
 var (
@@ -151,7 +159,7 @@ func (s *Server) bootFor(r *http.Request, extra map[string]any) map[string]any {
 	b := map[string]any{"base": s.cfg.BaseURL, "auth": s.cfg.Auth, "mcp_url": s.cfg.BaseURL + "/mcp", "title": "Artifacts", "version": version,
 		"sample": s.cfg.LLMURL != "", "org": s.cfg.OrgName}
 	if ss := s.sessionOf(r); ss != nil {
-		b["user"] = map[string]string{"id": ss.User.ID, "email": ss.User.Email, "name": ss.User.DisplayName()}
+		b["user"] = map[string]string{"id": ss.User.ID, "email": ss.User.Email, "name": ss.User.DisplayName(), "avatar": gravatarURL(ss.User.Email, ss.User.DisplayName())}
 		b["csrf"] = ss.CSRF
 		b["can_create"] = s.mayCreate(ss.User)
 	}
@@ -159,6 +167,18 @@ func (s *Server) bootFor(r *http.Request, extra map[string]any) map[string]any {
 		b[k] = v
 	}
 	return b
+}
+
+// gravatarURL is the user's Gravatar image; without one, Gravatar draws their initials.
+func gravatarURL(email, name string) string {
+	h := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	var ini []rune
+	for _, w := range strings.Fields(name) {
+		if ini = append(ini, unicode.ToUpper([]rune(w)[0])); len(ini) == 2 {
+			break
+		}
+	}
+	return "https://gravatar.com/avatar/" + hex.EncodeToString(h[:]) + "?s=64&d=initials&initials=" + url.QueryEscape(string(ini))
 }
 
 // resolveView decides which version a viewer may see. n = 0 means "default".

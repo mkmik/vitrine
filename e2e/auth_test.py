@@ -175,6 +175,15 @@ try:
     c, h, b = req(opener(), LOCAL + "/auth/proxy", headers={"X-Forwarded-Email": "mallory@example.com"})
     check(c == 401, "proxy JWT: plain email header ignored without a token")
 
+    # ---------- VITRINE_REQUIRE_SIGNIN: anonymous visitors always go to sign-in ----------
+    start({"VITRINE_AUTH": "proxy", "VITRINE_TRUSTED_PROXIES": "127.0.0.1", "VITRINE_REQUIRE_SIGNIN": "true"})
+    c, h, b = req(opener(), LOCAL + "/")
+    check(c == 302 and h["Location"] == "/auth/login?next=%2F", "require sign-in: the index page sends anonymous visitors to sign in")
+    op = opener(http.cookiejar.CookieJar())
+    req(op, LOCAL + "/auth/proxy?next=/", headers={"X-Forwarded-Email": "ivy@example.com"})
+    c, h, b = req(op, LOCAL + "/")
+    check(c == 200, "require sign-in: the index page opens once signed in")
+
     # ---------- the browser flow end to end in proxy mode (Playwright) ----------
     start({"VITRINE_AUTH": "proxy", "VITRINE_TRUSTED_PROXIES": "127.0.0.1"})
     from playwright.sync_api import sync_playwright
@@ -185,6 +194,9 @@ try:
         pg.locator("text=Sign in").first.click() if pg.locator("text=Sign in").count() else None
         pg.wait_for_load_state()
         check("hal@example.com" in pg.content(), "proxy: sign in from the index page in a real browser")
+        pg.click("button.avatar")
+        check(pg.locator("#usermenu").get_by_text("hal@example.com").is_visible() and pg.get_by_role("menuitem", name="Sign out").is_visible(),
+              "avatar opens a menu with the user's email and Sign out")
         b.close()
 finally:
     stop(); idp.terminate()

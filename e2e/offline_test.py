@@ -78,7 +78,8 @@ with sync_playwright() as p:
     c2.unroute("**/api/db/**")
     # sign-out clears the saved copies
     owner.goto(BASE + "/")
-    owner.get_by_text("Sign out").click()
+    owner.click("button.avatar")
+    owner.get_by_role("menuitem", name="Sign out").click()
     time.sleep(1)
     dbs = owner.evaluate("indexedDB.databases().then(d => d.map(x => x.name))")
     check("vitrine" not in dbs, "sign-out deletes the saved snapshots")

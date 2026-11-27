@@ -49,7 +49,7 @@ func (s *Store) accessFor(a *Artifact, u *User) Access {
 	gs, _ := s.grants(a.ID)
 	best, pin := lvNone, 0
 	for _, g := range gs {
-		match := g.Audience == "public" || (u != nil && (g.Audience == "users" || g.Audience == "email:"+u.Email))
+		match := (g.Audience == "public" && (u != nil || !s.requireSignIn)) || (u != nil && (g.Audience == "users" || g.Audience == "email:"+u.Email))
 		if !match {
 			continue
 		}
