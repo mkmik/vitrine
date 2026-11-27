@@ -176,6 +176,7 @@
     if (saving) return;
     $('thumbErr').textContent = '';
     if (A.kind === 'markdown') return choose({ y: mdPos ? mdPos.y : 0 });
+    autoSnap = 0;
     var paper = $('thumbPrev').querySelector('.paper'), id = snapping = Date.now();
     syncSave();
     toFrame({ t: 'snap', ratio: paper ? paper.clientHeight / paper.clientWidth : 0 });
@@ -186,6 +187,32 @@
     if (m.blob instanceof Blob) return choose({ file: m.blob });
     snapping = 0; syncSave();
     $('thumbErr').textContent = 'Could not capture this view (' + (m.error || 'no answer') + ').';
+  }
+  // The list shows an image, not the live page, when there is one: a few seconds after a page
+  // renders, an editor's viewer takes one by itself, of the latest version, from the top. Pages
+  // with capabilities show this viewer's own data and name, so those keep the live thumbnail.
+  var autoSnap = 0; // the version being captured, 0 = none
+  function wantAutoThumb() {
+    return A.kind === 'html' && (LV[state.level] || 0) >= LV.edit && state.follow && state.shown === state.head &&
+      !(state.caps || []).length && !phone.matches && document.visibilityState === 'visible' &&
+      (thumb.img ? thumb.auto > 0 && thumb.auto < state.shown : !thumb.y);
+  }
+  frame.addEventListener('load', function () {
+    var n = state.shown;
+    setTimeout(function () {
+      if (n !== state.shown || snapping || autoSnap || !wantAutoThumb()) return;
+      autoSnap = n;
+      toFrame({ t: 'snap', ratio: 0.68, top: true }); // a card's .paper: 91% of a 16:9 box's height by 76% of its width
+      setTimeout(function () { if (autoSnap === n) autoSnap = 0; }, 15000);
+    }, 3000);
+  });
+  function gotAutoSnap(m) {
+    var n = autoSnap;
+    autoSnap = 0;
+    if (!(m.blob instanceof Blob)) return;
+    fetch('/api/artifacts/' + A.id + '/thumb?auto=' + n, { method: 'POST', credentials: 'same-origin', body: m.blob,
+      headers: { 'Content-Type': m.blob.type || 'application/octet-stream', 'X-CSRF': boot.csrf || '' } })
+      .then(readJSON).then(function (j) { thumb = j; }, function () { });
   }
   $('thumbUp').addEventListener('click', function () { if (!saving) $('thumbFile').click(); });
   // a big photo is made thumbnail-sized before it goes up, so the upload stays small
@@ -556,7 +583,7 @@
     } else if (m.t === 'sample') {
       runSample(m.id, m.req || {}, gen);
     } else if (m.t === 'snap') {
-      gotSnap(m);
+      if (autoSnap && !snapping) gotAutoSnap(m); else gotSnap(m);
     } else if (m.t === 'sample.abort') {
       var c = samplesInFlight.get(gen + ':' + m.id); if (c) c.abort();
     }

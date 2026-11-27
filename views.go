@@ -34,16 +34,32 @@ func injectRuntime(html, script string) string {
 	return html[:n] + tag + html[n:]
 }
 
-var runtimeSrc = sync.OnceValue(func() string {
-	h, _ := webFS.ReadFile("web/harden.js")
-	b, _ := webFS.ReadFile("web/runtime.js")
-	return strings.ReplaceAll(string(h)+"\n"+string(b), "</script", "<\\/script")
-})
+func readScripts(names ...string) string {
+	var b strings.Builder
+	for _, n := range names {
+		s, _ := webFS.ReadFile("web/" + n)
+		b.Write(s)
+		b.WriteByte('\n')
+	}
+	return strings.ReplaceAll(b.String(), "</script", "<\\/script")
+}
+
+var (
+	runtimeSrc = sync.OnceValue(func() string { return readScripts("harden.js", "runtime.js") })
+	// outside the viewer (thumbnails, the bare page) claude.use has no shell to
+	// talk to and always gives null: the full runtime would be 12 KB of dead
+	// weight on every thumbnail in the list
+	rawRuntimeSrc = sync.OnceValue(func() string { return readScripts("harden.js", "runtime-raw.js") })
+)
 
 // runtimeJS configures the page runtime; y > 0 opens the page scrolled down that far.
 func (s *Server) runtimeJS(mode string, y int) string {
 	cfg, _ := json.Marshal(map[string]any{"mode": mode, "y": y})
-	return "window.__vitrine_cfg=" + string(cfg) + ";\n" + runtimeSrc()
+	src := runtimeSrc
+	if mode == "raw" {
+		src = rawRuntimeSrc
+	}
+	return "window.__vitrine_cfg=" + string(cfg) + ";\n" + src()
 }
 
 // permissionsPolicy turns off device and sensor access for artifact pages.
@@ -249,7 +265,7 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 			"pinned": acc.Pinned, "level": levelName(acc.Level), "caps": a.Caps().Names, "url": s.artifactURL(a.ID), "kind": a.Kind,
 			"updated_at": a.UpdatedAt,
 		},
-		"thumb": func() map[string]any { y, img := s.st.thumbMeta(a.ID); return map[string]any{"y": y, "img": img} }(),
+		"thumb": thumbJSON(s.st.thumbMeta(a.ID)),
 	}))
 }
 
@@ -583,11 +599,22 @@ const maxThumb = 2 << 20
 
 var thumbTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/webp": true, "image/gif": true}
 
+func thumbJSON(y int, img int64, auto int) map[string]any {
+	return map[string]any{"y": y, "img": img, "auto": auto}
+}
+
 // apiThumb sets the thumbnail: a JSON {"y": n} shows the page scrolled to n
 // (0 = the top, the default); an image body replaces it with that image.
+// ?auto=n marks an image the viewer took by itself of version n: it never
+// replaces one a person chose.
 func (s *Server) apiThumb(w http.ResponseWriter, r *http.Request) {
 	_, a, _ := s.loadForAPI(w, r, lvEdit)
 	if a == nil {
+		return
+	}
+	auto, _ := strconv.Atoi(r.URL.Query().Get("auto"))
+	if auto < 0 || auto > a.Head || auto > 0 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		writeJSON(w, 400, map[string]string{"error": "bad auto version"})
 		return
 	}
 	var err error
@@ -612,14 +639,17 @@ func (s *Server) apiThumb(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]string{"error": "use a PNG, JPEG, WebP or GIF image"})
 			return
 		}
-		err = s.st.setThumb(a.ID, 0, mime, b)
+		if auto > 0 {
+			err = s.st.setAutoThumb(a.ID, auto, mime, b)
+		} else {
+			err = s.st.setThumb(a.ID, 0, mime, b)
+		}
 	}
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	y, img := s.st.thumbMeta(a.ID)
-	writeJSON(w, 200, map[string]any{"y": y, "img": img})
+	writeJSON(w, 200, thumbJSON(s.st.thumbMeta(a.ID)))
 }
 
 func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {

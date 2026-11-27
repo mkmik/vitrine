@@ -76,7 +76,7 @@
         else if (m.ev === 'room.peers' || m.ev === 'room.msg') { if (onRoomEvent) onRoomEvent(m); }
         break;
       case 'snap':
-        snapshot(m.ratio).then(function (b) { post({ t: 'snap', blob: b }); }, function (e) { post({ t: 'snap', error: String(e && e.message || e) }); });
+        snapshot(m.ratio, m.top).then(function (b) { post({ t: 'snap', blob: b }); }, function (e) { post({ t: 'snap', error: String(e && e.message || e) }); });
         break;
       case 'sample.delta': case 'sample.done': case 'sample.err':
         var h = samples.get(m.id);
@@ -117,7 +117,9 @@
     });
   }
   // ratio: the thumbnail's height / width; a wide window takes in more of the page below to fill it
-  function snapshot(ratio) {
+  // top: from the top of the page, not where it is scrolled to
+  function snapshot(ratio, top) {
+    var sx = top ? 0 : scrollX, sy = top ? 0 : scrollY;
     var doc = document.documentElement, clone = doc.cloneNode(true), w = innerWidth, jobs = [];
     var h = Math.max(innerHeight, Math.round(w * (+ratio > 0 && +ratio < 4 ? +ratio : 0)));
     var src = doc.querySelectorAll('*'), dst = clone.querySelectorAll('*'); // same elements, same order
@@ -152,7 +154,7 @@
     [document.body, doc].forEach(function (e) { var c = e && getComputedStyle(e).backgroundColor; if (bg === 'rgba(0, 0, 0, 0)' && c) bg = c; });
     if (bg === 'rgba(0, 0, 0, 0)') bg = '#fff';
     return Promise.all(jobs).then(function () {
-      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="' + scrollX + ' ' + scrollY + ' ' + w + ' ' + h + '">' +
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="' + sx + ' ' + sy + ' ' + w + ' ' + h + '">' +
         '<foreignObject width="' + Math.max(doc.scrollWidth, w) + '" height="' + Math.max(doc.scrollHeight, h) + '">' +
         new XMLSerializer().serializeToString(clone) + '</foreignObject></svg>';
       return new Promise(function (res, rej) {
