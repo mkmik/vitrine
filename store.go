@@ -665,7 +665,8 @@ type ListFilter struct {
 	Folder string // a folder id, or "none" for artifacts in no folder
 }
 
-// accessible is the condition for artifacts u can list: owned, or shared with them or all users. Args: user id, "email:"+email.
+// accessible is the condition for artifacts u can list: owned, or shared with them or all users.
+// "link" grants open for every signed-in user but are left out on purpose: only those with the link find it. Args: user id, "email:"+email.
 const accessible = `(a.owner_id=? OR a.id IN (SELECT artifact_id FROM grants WHERE audience IN (?, 'users')))`
 
 // listFor returns artifacts the user owns or has a person/users grant for, newest first.

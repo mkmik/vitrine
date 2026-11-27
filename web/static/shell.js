@@ -293,18 +293,18 @@
     });
     // General access is one choice; public wins if an older setup left both grants.
     var by = {}; gs.forEach(function (g) { by[g.audience] = g; });
-    var cur = by.public || by.users || null, aud = cur ? cur.audience : '';
+    var cur = by.public || by.users || by.link || null, aud = cur ? cur.audience : '';
     var org = boot.org ? 'Anyone at ' + boot.org : 'Anyone who can sign in';
-    var hint = { '': 'Only the people above can open it.', users: 'Anyone who signs in here can open it.', public: boot.require_signin ? 'Anyone with the link, once they sign in here.' : 'Anyone with the link, no sign-in needed.' };
+    var hint = { '': 'Only the people above can open it.', users: 'Anyone who signs in here can open it, and it shows up in their list.', link: 'Anyone who signs in here and has the link can open it. It does not show up in their list.', public: boot.require_signin ? 'Anyone with the link, once they sign in here.' : 'Anyone with the link, no sign-in needed.' };
     var setAud = function (a) {
       var drop = function (x) { return by[x] && x !== a ? share(x, 'none', 0) : null; };
       var lvl = cur ? cur.level : 'view';
       if (a === 'public' && lvl === 'edit') lvl = 'interact';
       (a ? share(a, lvl, cur && lvl !== 'edit' ? cur.pinned || 0 : 0) : Promise.resolve())
-        .then(function () { return drop('users'); }).then(function () { return drop('public'); }).catch(function () { });
+        .then(function () { return drop('users'); }).then(function () { return drop('link'); }).then(function () { return drop('public'); }).catch(function () { });
     };
-    var lvls = [['view', 'Viewer'], ['interact', 'Interactor']].concat(aud === 'users' ? [['edit', 'Editor']] : []);
-    var auds = [['', 'Restricted'], ['users', org]];
+    var lvls = [['view', 'Viewer'], ['interact', 'Interactor']].concat(aud === 'users' || aud === 'link' ? [['edit', 'Editor']] : []);
+    var auds = [['', 'Restricted'], ['users', org], ['link', org + ' with the link']];
     if (boot.public_sharing) auds.push(['public', 'Anyone with the link']);
     else if (aud === 'public') { // made before public sharing was turned off: it opens nothing now
       auds.push(['public', 'Anyone with the link (off)']);

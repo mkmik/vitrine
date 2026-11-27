@@ -205,7 +205,7 @@ func (s *Server) opRestore(id string, version, base int, author string) (*Artifa
 	return na, nil
 }
 
-// opShare grants or revokes. who: public | users | an email address.
+// opShare grants or revokes. who: public | users | link | an email address.
 func (s *Server) opShare(a *Artifact, who, level string, version int) ([]Grant, error) {
 	who = strings.ToLower(strings.TrimSpace(who))
 	var aud string
@@ -214,10 +214,12 @@ func (s *Server) opShare(a *Artifact, who, level string, version int) ([]Grant, 
 		aud = "public"
 	case "users", "signed-in", "all":
 		aud = "users"
+	case "link":
+		aud = "link"
 	default:
 		addr, err := mail.ParseAddress(who)
 		if err != nil {
-			return nil, oerr("invalid_argument", "who must be public, users, or an email address")
+			return nil, oerr("invalid_argument", "who must be public, users, link, or an email address")
 		}
 		aud = "email:" + strings.ToLower(addr.Address)
 	}
@@ -227,7 +229,7 @@ func (s *Server) opShare(a *Artifact, who, level string, version int) ([]Grant, 
 		return nil, oerr("invalid_argument", "level must be view, interact, edit or none")
 	}
 	if aud == "public" && level != "none" && s.cfg.NoPublicSharing { // revoking stays possible
-		return nil, oerr("invalid_argument", "public sharing is turned off on this server: share with \"users\" (everyone who can sign in) or with people by email")
+		return nil, oerr("invalid_argument", "public sharing is turned off on this server: share with \"users\" (everyone who can sign in), \"link\" (anyone who can sign in and has the link) or with people by email")
 	}
 	if aud == "public" && level == "edit" {
 		return nil, oerr("invalid_argument", "the public can get view or interact, never edit")
