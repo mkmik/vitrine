@@ -5,7 +5,9 @@ cd "$(dirname "$0")/.."
 go build -trimpath -o vitrine .
 sudo install -m 755 vitrine /usr/local/bin/vitrine
 id vitrine >/dev/null 2>&1 || sudo useradd --system --home /var/lib/vitrine --shell /usr/sbin/nologin vitrine
-sudo install -d -o vitrine -g vitrine -m 750 /var/lib/vitrine /var/lib/vitrine/backups
+sudo install -d -o vitrine -g vitrine -m 750 /var/lib/vitrine
+# As vitrine, not root: the vitrine user owns this path and could swap it for a symlink.
+sudo -u vitrine mkdir -p -m 750 /var/lib/vitrine/backups
 if [ ! -f /etc/vitrine/env ]; then
   sudo install -d -m 755 /etc/vitrine
   sudo tee /etc/vitrine/env >/dev/null <<'EOF'
