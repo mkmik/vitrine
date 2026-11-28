@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.svg" width="96" alt="vitrine logo"></p>
+
 # vitrine
 
 Self-hosted artifact server. Agents create, read and iterate on single-file
